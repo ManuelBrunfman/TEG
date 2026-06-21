@@ -6,3 +6,5 @@ data/
 .env
 .research-teg/
 *.log
+.tools/
+.tmp/

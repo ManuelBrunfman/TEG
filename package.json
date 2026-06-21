@@ -9,6 +9,7 @@
     "dev:server": "tsx watch server/index.ts",
     "build": "vite build && tsc -p tsconfig.server.json",
     "start": "node dist-server/server/index.js",
+    "share": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/share.ps1",
     "test": "tsc -p tsconfig.test.json && node dist-test/shared/game.test.js",
     "check": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit"
   },

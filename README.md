@@ -24,6 +24,18 @@ npm start
 
 La aplicación completa queda disponible en `http://localhost:3100`.
 
+## Compartir temporalmente por Internet
+
+Con `cloudflared.exe` guardado en `.tools`, ejecutar:
+
+```powershell
+npm run share
+```
+
+El comando inicia el servidor si fuera necesario y muestra una dirección HTTPS temporal de `trycloudflare.com`. Compartir esa dirección solamente con testers. La computadora debe permanecer encendida y la ventana del túnel abierta.
+
+No es necesario abrir puertos del router. Los Quick Tunnels son apropiados para pruebas, no para producción ni disponibilidad permanente.
+
 ## Administración
 
 Copiar `.env.example` como `.env` o definir las variables de entorno antes de iniciar:

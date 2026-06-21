@@ -172,8 +172,8 @@ app.post(
 );
 
 function adminAllowed(request: express.Request) {
-  const configured = process.env.ADMIN_PIN || "cambiar-este-pin";
-  return request.header("x-admin-pin") === configured;
+  const configured = process.env.ADMIN_PIN;
+  return Boolean(configured) && request.header("x-admin-pin") === configured;
 }
 
 app.get("/api/admin/overview", (request, response) => {
