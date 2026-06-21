@@ -11,7 +11,7 @@ interface Props {
   initialGame: GameState;
   session: Session;
   local: boolean;
-  onExit: () => void;
+  onExit: (finished?: boolean) => void;
 }
 
 const phaseText: Record<GameState["phase"], string> = {
@@ -21,6 +21,15 @@ const phaseText: Record<GameState["phase"], string> = {
   attack: "Ataque",
   regroup: "Reagrupamiento",
   finished: "Campaña finalizada"
+};
+
+const phaseDetails: Record<GameState["phase"], { icon: string; kind: string; step: number; instruction: string }> = {
+  "setup-5": { icon: "⚑", kind: "placement", step: 1, instruction: "Tocá un territorio propio para colocar un ejército." },
+  "setup-3": { icon: "⚑", kind: "placement", step: 1, instruction: "Tocá un territorio propio para completar la disposición inicial." },
+  reinforce: { icon: "♜", kind: "placement", step: 1, instruction: "Ubicá todos tus refuerzos antes de atacar." },
+  attack: { icon: "⚔", kind: "attack", step: 2, instruction: "Elegí un territorio propio y luego un enemigo limítrofe." },
+  regroup: { icon: "↔", kind: "regroup", step: 3, instruction: "Mové hasta 3 ejércitos entre territorios propios o finalizá el turno." },
+  finished: { icon: "♛", kind: "finished", step: 3, instruction: "La campaña ha finalizado." }
 };
 
 export function GameView({ initialGame, session, local, onExit }: Props) {
@@ -181,6 +190,8 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   const selectedName = selected === null ? "" : COUNTRIES[selected].name;
   const winner = game.players.find((player) => player.id === game.winnerId);
   const canStart = game.status === "lobby" && game.hostId === session.id;
+  const phase = phaseDetails[game.phase];
+  const phaseInstruction = isMyTurn ? phase.instruction : `Esperando a ${active?.name ?? "otro comandante"}.`;
   const battleText = useMemo(() => {
     if (!game.lastBattle) return null;
     const battle = game.lastBattle;
@@ -196,7 +207,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   if (game.status === "lobby") {
     return (
       <main className="lobby-room page-shell">
-        <button className="text-button" onClick={onExit}>← Volver</button>
+        <button className="text-button" onClick={() => onExit(false)}>← Volver</button>
         <section className="panel lobby-card">
           <p className="eyebrow">Sala de guerra</p>
           <h1>{game.name}</h1>
@@ -270,10 +281,10 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   return (
     <main className="game-screen">
       <header className="war-bar">
-        <button className="icon-button" onClick={onExit} aria-label="Salir">☰</button>
+        <button className="icon-button" onClick={() => onExit(game.status === "finished")} aria-label="Salir">☰</button>
         <div>
           <strong>{game.name}</strong>
-          <small>Ronda {game.round || "inicial"} · {phaseText[game.phase]}</small>
+          <small>Ronda {game.round || "inicial"}</small>
         </div>
         <div className={`turn-clock ${seconds <= 15 ? "turn-clock--danger" : ""}`}>
           <span>⌛</span><strong>{seconds}s</strong>
@@ -293,6 +304,18 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
       <div className="board-layout">
         <section className="board-wrap">
           <MapBoard game={game} selected={selected} onSelect={selectCountry} colorBlind={colorBlind} />
+          <div className={`phase-banner phase-banner--${phase.kind}`}>
+            <span className="phase-banner-icon">{phase.icon}</span>
+            <div className="phase-banner-copy">
+              <small>FASE ACTUAL · {isMyTurn ? "TU TURNO" : `TURNO DE ${active?.name?.toUpperCase()}`}</small>
+              <strong>{phaseText[game.phase]}</strong>
+              <p>{phaseInstruction}</p>
+            </div>
+            <div className="phase-progress" aria-label={`Paso ${phase.step} de 3`}>
+              {[1, 2, 3].map((step) => <i className={step <= phase.step ? "active" : ""} key={step} />)}
+              <span>{phase.step}/3</span>
+            </div>
+          </div>
           {battleText && <div className="battle-toast">⚔ {battleText}</div>}
           {error && <button className="error-banner error-banner--floating" onClick={() => setError("")}>{error} ×</button>}
           {game.status === "finished" && (
@@ -302,7 +325,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                 <p className="eyebrow">Victoria</p>
                 <h2>{winner?.name}</h2>
                 <p>{game.winnerReason}</p>
-                <button className="button" onClick={onExit}>Volver al salón</button>
+                <button className="button" onClick={() => onExit(true)}>Salir de la partida</button>
               </div>
             </div>
           )}

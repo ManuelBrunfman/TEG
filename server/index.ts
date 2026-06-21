@@ -11,6 +11,7 @@ import {
   acceptFriend,
   acceptGameInvite,
   createGameInvite,
+  deleteGuestUserIfInactive,
   listFriends,
   listGameInvites,
   listUsers,
@@ -60,6 +61,12 @@ app.post(
     };
     upsertUser(session);
     response.json(session);
+  })
+);
+app.delete(
+  "/api/session/:id",
+  wrap((request, response) => {
+    response.json({ deleted: deleteGuestUserIfInactive(String(request.params.id)) });
   })
 );
 

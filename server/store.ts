@@ -11,7 +11,7 @@ import {
   systemMessage
 } from "../shared/game.js";
 import type { GameAction, GameSettings, GameState, Session } from "../shared/types.js";
-import { loadGames, saveGame } from "./db.js";
+import { loadGames, purgeInactiveGuestUsers, saveGame } from "./db.js";
 
 class GameStore {
   private games = new Map<string, GameState>();
@@ -27,6 +27,7 @@ class GameStore {
       });
       this.games.set(game.id, game);
     }
+    purgeInactiveGuestUsers();
   }
 
   create(name: string, host: Session, settings: GameSettings) {

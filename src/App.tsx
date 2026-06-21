@@ -29,10 +29,16 @@ export default function App() {
   const [localMode, setLocalMode] = useState(false);
   const [page, setPage] = useState<"home" | "create" | "local" | "admin" | "legal">("home");
 
-  const exitGame = () => {
+  const exitGame = (finished = false) => {
+    if (finished) localStorage.removeItem("reinos-local-game");
     setGame(null);
     setLocalMode(false);
     setPage("home");
+    if (finished && session && !session.registered) {
+      localStorage.removeItem("reinos-session");
+      void api.deleteGuestSession(session.id).catch(() => undefined);
+      setSession(null);
+    }
   };
 
   if (!session) return <Welcome onReady={(next) => {

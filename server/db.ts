@@ -78,16 +78,39 @@ export function saveGame(state: GameState) {
     createdAt: state.createdAt,
     updatedAt: state.updatedAt
   });
-  if (state.status === "finished" && state.winnerId) recordResult(state);
+  if (state.status === "finished") finalizeGame(state);
 }
 
-const recordResult = db.transaction((state: GameState) => {
+const finalizeGame = db.transaction((state: GameState) => {
   const inserted = db.prepare("INSERT OR IGNORE INTO recorded_results (game_id, recorded_at) VALUES (?, ?)").run(state.id, Date.now());
   if (!inserted.changes) return;
   for (const player of state.players.filter((item) => !item.isBot)) {
-    db.prepare("UPDATE users SET games_played = games_played + 1, updated_at = ? WHERE id = ?").run(Date.now(), player.id);
+    const user = db.prepare("SELECT registered FROM users WHERE id = ?").get(player.id) as
+      | { registered: number }
+      | undefined;
+    if (!user) continue;
+    if (user.registered) {
+      db.prepare("UPDATE users SET games_played = games_played + 1, updated_at = ? WHERE id = ?").run(Date.now(), player.id);
+      if (state.winnerId === player.id) {
+        db.prepare("UPDATE users SET games_won = games_won + 1, updated_at = ? WHERE id = ?").run(Date.now(), player.id);
+      }
+      continue;
+    }
+
+    const otherActiveGame = db.prepare(`
+      SELECT 1
+      FROM games g, json_each(g.state_json, '$.players') participant
+      WHERE g.id <> ?
+        AND g.status <> 'finished'
+        AND json_extract(participant.value, '$.id') = ?
+      LIMIT 1
+    `).get(state.id, player.id);
+    if (otherActiveGame) continue;
+
+    db.prepare("DELETE FROM friendships WHERE user_id = ? OR friend_id = ?").run(player.id, player.id);
+    db.prepare("DELETE FROM game_invites WHERE from_user_id = ? OR to_user_id = ?").run(player.id, player.id);
+    db.prepare("DELETE FROM users WHERE id = ? AND registered = 0").run(player.id);
   }
-  db.prepare("UPDATE users SET games_won = games_won + 1, updated_at = ? WHERE id = ?").run(Date.now(), state.winnerId);
 });
 
 export function loadGames(): GameState[] {
@@ -110,6 +133,32 @@ export function upsertUser(session: Session) {
     VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET name = excluded.name, avatar = excluded.avatar, updated_at = excluded.updated_at
   `).run(session.id, session.name, session.avatar, session.registered ? 1 : 0, now, now);
+}
+
+export function deleteGuestUserIfInactive(userId: string) {
+  const user = db.prepare("SELECT registered FROM users WHERE id = ?").get(userId) as
+    | { registered: number }
+    | undefined;
+  if (!user || user.registered) return false;
+  const activeGame = db.prepare(`
+    SELECT 1
+    FROM games g, json_each(g.state_json, '$.players') participant
+    WHERE g.status <> 'finished'
+      AND json_extract(participant.value, '$.id') = ?
+    LIMIT 1
+  `).get(userId);
+  if (activeGame) return false;
+  const remove = db.transaction(() => {
+    db.prepare("DELETE FROM friendships WHERE user_id = ? OR friend_id = ?").run(userId, userId);
+    db.prepare("DELETE FROM game_invites WHERE from_user_id = ? OR to_user_id = ?").run(userId, userId);
+    return db.prepare("DELETE FROM users WHERE id = ? AND registered = 0").run(userId).changes > 0;
+  });
+  return remove();
+}
+
+export function purgeInactiveGuestUsers() {
+  const guests = db.prepare("SELECT id FROM users WHERE registered = 0").all() as Array<{ id: string }>;
+  return guests.reduce((deleted, guest) => deleted + (deleteGuestUserIfInactive(guest.id) ? 1 : 0), 0);
 }
 
 export function listUsers() {

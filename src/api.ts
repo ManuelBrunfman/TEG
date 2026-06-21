@@ -44,6 +44,8 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 export const api = {
   session: (name: string, avatar: string, id?: string) =>
     request<Session>("/api/session", { method: "POST", body: JSON.stringify({ name, avatar, id }) }),
+  deleteGuestSession: (userId: string) =>
+    request<{ deleted: boolean }>(`/api/session/${userId}`, { method: "DELETE" }),
   publicGames: () => request<PublicGameSummary[]>("/api/games"),
   createGame: (name: string, host: Session, settings: GameSettings) =>
     request<GameState>("/api/games", { method: "POST", body: JSON.stringify({ name, host, settings }) }),
