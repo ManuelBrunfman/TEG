@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { addPlayer, applyAction, createGame, startGame } from "./game.js";
+import { addPlayer, applyAction, createGame, runBotStep, startGame } from "./game.js";
 import type { GameSettings, Session } from "./types.js";
 import { TERRITORY_SPRITES } from "./territories.js";
 
@@ -40,6 +40,12 @@ describe("motor de Reinos en Guerra", () => {
     assert.equal(TERRITORY_SPRITES.length, 50);
     assert.deepEqual(TERRITORY_SPRITES.map((sprite) => sprite.id), Array.from({ length: 50 }, (_, id) => id));
     assert.ok(TERRITORY_SPRITES.every((sprite) => sprite.width > 0 && sprite.height > 0));
+    assert.ok(TERRITORY_SPRITES.every((sprite) =>
+      sprite.markerX >= sprite.x &&
+      sprite.markerX <= sprite.x + sprite.width &&
+      sprite.markerY >= sprite.y &&
+      sprite.markerY <= sprite.y + sprite.height
+    ));
   });
 
   it("completa las rondas iniciales de 5 y 3 ejércitos", () => {
@@ -135,5 +141,52 @@ describe("motor de Reinos en Guerra", () => {
     applyAction(game, first.id, { type: "resume" });
     assert.equal(game.paused, false);
     assert.ok(game.turnDeadline);
+  });
+
+  it("completa partidas de dos a seis bots sin estados inválidos", (context) => {
+    const originalRandom = Math.random;
+    const results: Array<{ players: number; actions: number; rounds: number; winner?: string; reason: string | null }> = [];
+    try {
+      for (let playerCount = 2; playerCount <= 6; playerCount += 1) {
+        let seed = 721347 + playerCount * 997;
+        Math.random = () => {
+          seed = (seed * 48271) % 0x7fffffff;
+          return seed / 0x7fffffff;
+        };
+
+        const botSettings: GameSettings = { ...settings, maxPlayers: playerCount };
+        const game = createGame({ name: `Simulación ${playerCount}`, host: { ...host, id: `bot-1-${playerCount}` }, settings: botSettings });
+        game.players[0].isBot = true;
+        game.players[0].connected = true;
+        for (let index = 2; index <= playerCount; index += 1) addPlayer(game, { name: `Bot ${index}`, isBot: true });
+
+        startGame(game);
+        let actions = 0;
+        while (game.status === "playing" && actions < 100000) {
+          runBotStep(game);
+          actions += 1;
+
+          const validOwners = new Set(game.players.map((player) => player.id));
+          assert.equal(game.countries.length, 50);
+          assert.ok(game.countries.every((country) => validOwners.has(country.ownerId)));
+          assert.ok(game.countries.every((country) => Number.isInteger(country.armies) && country.armies >= 1));
+          assert.ok(game.activePlayerIndex >= 0 && game.activePlayerIndex < game.players.length);
+        }
+
+        assert.equal(game.status, "finished", `la simulación de ${playerCount} jugadores superó 100.000 acciones`);
+        assert.ok(game.winnerId);
+        assert.ok(game.round > 0);
+        results.push({
+          players: playerCount,
+          actions,
+          rounds: game.round,
+          winner: game.players.find((player) => player.id === game.winnerId)?.name,
+          reason: game.winnerReason
+        });
+      }
+      context.diagnostic(JSON.stringify(results));
+    } finally {
+      Math.random = originalRandom;
+    }
   });
 });

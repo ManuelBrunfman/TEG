@@ -1,3 +1,4 @@
+import { type TouchEvent, useEffect, useRef, useState } from "react";
 import { ADJACENCY, COLOR_HEX, COUNTRIES } from "@shared/map";
 import { TERRITORY_SPRITES } from "@shared/territories";
 import type { GameState } from "@shared/types";
@@ -10,13 +11,94 @@ interface Props {
 }
 
 const asset = (file: string) => `/map/teg/${file}`;
+const armyRadius = (armies: number) => {
+  if (armies <= 2) return 7;
+  if (armies <= 4) return 8;
+  if (armies <= 6) return 9;
+  if (armies <= 8) return 10;
+  return 11;
+};
 
 export function MapBoard({ game, selected, onSelect, colorBlind }: Props) {
   const selectedNeighbors = new Set(selected === null ? [] : ADJACENCY[selected] ?? []);
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const centerRef = useRef({ x: 0.5, y: 0.5 });
+  const pinchRef = useRef<{ distance: number; zoom: number } | null>(null);
+  const [viewport, setViewport] = useState({ width: 860, height: 520 });
+  const [zoom, setZoom] = useState(1);
+
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+    const resize = () => setViewport({ width: element.clientWidth, height: element.clientHeight });
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const element = viewportRef.current;
+    if (!element) return;
+    requestAnimationFrame(() => {
+      element.scrollLeft = centerRef.current.x * element.scrollWidth - element.clientWidth / 2;
+      element.scrollTop = centerRef.current.y * element.scrollHeight - element.clientHeight / 2;
+    });
+  }, [zoom, viewport]);
+
+  const fitScale = Math.max(0.1, Math.min((viewport.width - 32) / 860, (viewport.height - 32) / 520));
+  const mapWidth = 860 * fitScale * zoom;
+  const mapHeight = 520 * fitScale * zoom;
+  const stageWidth = Math.max(viewport.width, mapWidth + 32);
+  const stageHeight = Math.max(viewport.height, mapHeight + 32);
+
+  const setMapZoom = (next: number) => {
+    const element = viewportRef.current;
+    if (element) {
+      centerRef.current = {
+        x: (element.scrollLeft + element.clientWidth / 2) / Math.max(1, element.scrollWidth),
+        y: (element.scrollTop + element.clientHeight / 2) / Math.max(1, element.scrollHeight)
+      };
+    }
+    setZoom(Math.max(1, Math.min(3, next)));
+  };
+
+  const touchDistance = (event: TouchEvent<HTMLDivElement>) => {
+    const first = event.touches[0];
+    const second = event.touches[1];
+    return Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+  };
+
+  const beginPinch = (event: TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length === 2) pinchRef.current = { distance: touchDistance(event), zoom };
+  };
+
+  const movePinch = (event: TouchEvent<HTMLDivElement>) => {
+    if (event.touches.length !== 2 || !pinchRef.current) return;
+    event.preventDefault();
+    setMapZoom(pinchRef.current.zoom * (touchDistance(event) / pinchRef.current.distance));
+  };
 
   return (
-    <div className="map-scroll">
-      <svg className="world-map" viewBox="0 0 860 520" role="img" aria-label="Mapa mundial de TEG">
+    <div className="map-shell">
+      <div
+        className="map-scroll"
+        ref={viewportRef}
+        onTouchStart={beginPinch}
+        onTouchMove={movePinch}
+        onTouchEnd={(event) => {
+          if (event.touches.length < 2) pinchRef.current = null;
+        }}
+        onDoubleClick={() => setMapZoom(zoom === 1 ? 2 : 1)}
+      >
+        <div className="map-stage" style={{ width: stageWidth, height: stageHeight }}>
+      <svg
+        className="world-map"
+        viewBox="0 0 860 520"
+        role="img"
+        aria-label="Mapa mundial de TEG"
+        style={{ width: mapWidth, height: mapHeight }}
+      >
         <defs>
           <filter id="army-shadow">
             <feDropShadow dx="0" dy="2" stdDeviation="2" floodOpacity=".6" />
@@ -102,7 +184,7 @@ export function MapBoard({ game, selected, onSelect, colorBlind }: Props) {
               <circle
                 cx={sprite.markerX}
                 cy={sprite.markerY}
-                r="11"
+                r={armyRadius(state.armies)}
                 fill={owner ? COLOR_HEX[owner.color] : "#777"}
                 filter="url(#army-shadow)"
               />
@@ -113,9 +195,9 @@ export function MapBoard({ game, selected, onSelect, colorBlind }: Props) {
               )}
               <text
                 x={sprite.markerX}
-                y={sprite.markerY + (colorBlind ? 6 : 4)}
+                y={sprite.markerY + (colorBlind ? 5 : 3.5)}
                 textAnchor="middle"
-                className={`country-army ${colorBlind ? "country-army--small" : ""}`}
+                className={`country-army ${colorBlind || state.armies < 10 ? "country-army--small" : ""}`}
               >
                 {state.armies}
               </text>
@@ -123,6 +205,13 @@ export function MapBoard({ game, selected, onSelect, colorBlind }: Props) {
           );
         })}
       </svg>
+        </div>
+      </div>
+      <div className="map-zoom-controls" aria-label="Controles de zoom">
+        <button onClick={() => setMapZoom(zoom - 0.5)} disabled={zoom <= 1} aria-label="Alejar mapa">−</button>
+        <button onClick={() => setMapZoom(1)} aria-label="Ver mapa completo">{Math.round(zoom * 100)}%</button>
+        <button onClick={() => setMapZoom(zoom + 0.5)} disabled={zoom >= 3} aria-label="Acercar mapa">+</button>
+      </div>
     </div>
   );
 }

@@ -342,7 +342,12 @@ function attack(state: GameState, fromId: number, toId: number, requestedDice?: 
   }
   state.lastBattle = { from: fromId, to: toId, attackerDice, defenderDice, attackerLosses, defenderLosses, conquered };
   if (state.status !== "finished" && occupationMissionCompleted(state, attacker)) {
-    finishGame(state, attacker.id, ownedCountries(state, attacker.id).length >= 30 ? "Ocupó 30 territorios." : missionText(attacker.missionId));
+    const reason = state.players.length <= 3
+      ? "Conquistó los 50 territorios."
+      : ownedCountries(state, attacker.id).length >= 30
+        ? "Ocupó 30 territorios."
+        : missionText(attacker.missionId);
+    finishGame(state, attacker.id, reason);
   }
   resetDeadline(state);
 }

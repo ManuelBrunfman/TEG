@@ -9,7 +9,7 @@ export interface TerritorySprite {
   markerY: number;
 }
 
-export const TERRITORY_SPRITES: TerritorySprite[] = [
+const RAW_TERRITORY_SPRITES: TerritorySprite[] = [
   { id: 0, file: "America_del_Sur_Argentina.png", x: 260, y: 355, width: 57, height: 100, markerX: 260, markerY: 383 },
   { id: 1, file: "America_del_Sur_Brasil.png", x: 286, y: 280, width: 106, height: 87, markerX: 294, markerY: 306 },
   { id: 2, file: "America_del_Sur_Chile.png", x: 252, y: 355, width: 24, height: 94, markerX: 244, markerY: 363 },
@@ -61,6 +61,24 @@ export const TERRITORY_SPRITES: TerritorySprite[] = [
   { id: 48, file: "Asia_Kamtchatka.png", x: 724, y: 44, width: 59, height: 49, markerX: 744, markerY: 60 },
   { id: 49, file: "Asia_Japon.png", x: 793, y: 75, width: 60, height: 54, markerX: 813, markerY: 95 }
 ];
+
+const CORRECT_ARMY_MARKERS: Array<[number, number]> = [
+  [288.5, 419], [343, 336.5], [260, 406], [272.5, 305], [282.5, 343.5], [327.5, 369],
+  [194, 267], [130, 224], [76.5, 222], [151, 165.5], [36, 183], [72.5, 131], [132, 86],
+  [185, 145], [217.5, 119.5], [294, 90], [534, 369], [577, 411.5], [613.5, 368.5],
+  [637.5, 337.5], [685.5, 408], [624, 441.5], [829, 372], [796, 302], [840.5, 294.5],
+  [754.5, 337.5], [445, 288], [514, 238], [564, 227.5], [561.5, 284.5], [604.5, 229],
+  [615.5, 156.5], [531.5, 116], [476, 181.5], [378, 170.5], [693.5, 299],
+  [656.5, 281], [669.5, 228.5], [766, 271], [819.5, 242], [683, 174], [724.5, 190.5],
+  [780.5, 162], [699.5, 148.5], [710, 95.5], [634.5, 83.5], [654, 60.5], [694.5, 61.5],
+  [753.5, 58.5], [818, 112]
+];
+
+export const TERRITORY_SPRITES: TerritorySprite[] = RAW_TERRITORY_SPRITES.map((sprite) => ({
+  ...sprite,
+  markerX: CORRECT_ARMY_MARKERS[sprite.id][0],
+  markerY: CORRECT_ARMY_MARKERS[sprite.id][1]
+}));
 
 export const TERRITORY_SPRITE_BY_ID = Object.fromEntries(
   TERRITORY_SPRITES.map((sprite) => [sprite.id, sprite])
