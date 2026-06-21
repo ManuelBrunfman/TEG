@@ -16,7 +16,7 @@
   "dependencies": {
     "better-sqlite3": "11.7.0",
     "cors": "2.8.5",
-    "express": "4.21.2",
+    "express": "4.22.2",
     "nanoid": "5.0.9",
     "react": "18.3.1",
     "react-dom": "18.3.1",
@@ -36,6 +36,10 @@
     "tsx": "4.19.2",
     "typescript": "5.7.2",
     "vite": "5.4.11",
-    "vite-plugin-pwa": "0.21.1"
+    "vite-plugin-pwa": "0.21.1",
+    "workbox-window": "7.3.0"
+  },
+  "overrides": {
+    "workbox-build": "7.3.0"
   }
 }

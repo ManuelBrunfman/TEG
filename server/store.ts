@@ -25,7 +25,14 @@ class GameStore {
       game.regroupLocked ??= {};
       game.baseReinforcements ??= game.reinforcements;
       game.continentReinforcements ??= {};
+      game.roundStarterIndex ??= game.activePlayerIndex;
+      game.roundStage ??= game.phase === "reinforce" ? "reinforce" : "combat";
+      game.pendingConquest ??= null;
       game.players.forEach((player) => {
+        player.cards = player.cards.map((card) => ({
+          ...card,
+          used: card.used ?? (game.countries[card.countryId]?.ownerId === player.id)
+        }));
         if (!player.isBot) player.connected = false;
       });
       this.games.set(game.id, game);

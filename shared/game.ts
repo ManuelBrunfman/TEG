@@ -56,6 +56,8 @@ export function createGame(params: {
     ],
     countries: [],
     activePlayerIndex: 0,
+    roundStarterIndex: 0,
+    roundStage: "combat",
     phase: "setup-5",
     setupRound: 0,
     reinforcements: 0,
@@ -67,6 +69,7 @@ export function createGame(params: {
     discard: [],
     exchangeValue: 4,
     lastBattle: null,
+    pendingConquest: null,
     winnerId: null,
     winnerReason: null,
     messages: [],
@@ -148,7 +151,8 @@ export function startGame(state: GameState): GameState {
   state.deck = shuffle(
     COUNTRIES.map((country) => ({
       countryId: country.id,
-      symbol: country.symbol
+      symbol: country.symbol,
+      used: false
     }))
   );
   const missions = buildMissions(state.players);
@@ -159,9 +163,12 @@ export function startGame(state: GameState): GameState {
   state.phase = "setup-5";
   state.setupRound = 0;
   state.activePlayerIndex = 0;
+  state.roundStarterIndex = 0;
+  state.roundStage = "combat";
   state.reinforcements = 5;
   state.baseReinforcements = 5;
   state.continentReinforcements = {};
+  state.pendingConquest = null;
   state.turnDeadline = Date.now() + state.settings.turnSeconds * 1000;
   state.messages.push(systemMessage("La campaña comenzó. Cada reino dispone sus primeros 5 ejércitos."));
   state.updatedAt = Date.now();
@@ -182,7 +189,8 @@ function continentReinforcementPlan(state: GameState, playerId: string) {
 }
 
 function beginReinforcements(state: GameState, playerId: string) {
-  state.baseReinforcements = Math.max(1, Math.floor(ownedCountries(state, playerId).length / 2));
+  const countryCount = ownedCountries(state, playerId).length;
+  state.baseReinforcements = countryCount <= 6 ? 3 : Math.floor(countryCount / 2);
   state.continentReinforcements = continentReinforcementPlan(state, playerId);
   state.reinforcements =
     state.baseReinforcements +
@@ -204,7 +212,18 @@ function nextLivingIndex(state: GameState, fromIndex: number) {
 function finishPlacement(state: GameState) {
   if (state.reinforcements > 0) return;
   if (state.phase === "reinforce") {
-    state.phase = "attack";
+    const nextIndex = nextLivingIndex(state, state.activePlayerIndex);
+    state.baseReinforcements = 0;
+    state.continentReinforcements = {};
+    if (nextIndex === state.roundStarterIndex) {
+      state.activePlayerIndex = state.roundStarterIndex;
+      state.roundStage = "combat";
+      state.phase = "attack";
+      state.messages.push(systemMessage("Todos los reinos terminaron sus refuerzos. Comienza la fase de ataques."));
+    } else {
+      state.activePlayerIndex = nextIndex;
+      beginReinforcements(state, activePlayer(state).id);
+    }
     resetDeadline(state);
     return;
   }
@@ -218,12 +237,16 @@ function finishPlacement(state: GameState) {
     state.continentReinforcements = {};
     state.messages.push(systemMessage("Comienza la segunda disposición: 3 ejércitos por reino."));
   } else if (wasLast && state.phase === "setup-3") {
-    state.phase = "reinforce";
+    state.phase = "attack";
     state.setupRound = 2;
     state.round = 1;
     state.activePlayerIndex = 0;
-    beginReinforcements(state, activePlayer(state).id);
-    state.messages.push(systemMessage("La guerra comienza."));
+    state.roundStarterIndex = 0;
+    state.roundStage = "combat";
+    state.reinforcements = 0;
+    state.baseReinforcements = 0;
+    state.continentReinforcements = {};
+    state.messages.push(systemMessage("La guerra comienza. En la primera ronda se ataca sin recibir nuevos refuerzos."));
   } else {
     state.reinforcements = state.phase === "setup-5" ? 5 : 3;
     state.baseReinforcements = state.reinforcements;
@@ -278,7 +301,7 @@ function exchangeReward(exchangeNumber: number) {
   return exchangeNumber === 0 ? 4 : exchangeNumber === 1 ? 7 : exchangeNumber === 2 ? 10 : 10 + (exchangeNumber - 2) * 5;
 }
 
-function validExchange(cards: CountryCard[]) {
+export function validExchange(cards: CountryCard[]) {
   if (cards.length !== 3) return false;
   if (cards.some((card) => card.symbol === "comodín")) return true;
   const symbols = new Set<CardSymbol>(cards.map((card) => card.symbol));
@@ -321,14 +344,6 @@ function attack(state: GameState, fromId: number, toId: number, requestedDice?: 
   }
 
   const defenderPlayer = state.players.find((player) => player.id === to.ownerId)!;
-  if (state.settings.defensiveExchange) {
-    const defensiveCards = findValidExchangeCards(defenderPlayer.cards);
-    if (defensiveCards) {
-      const defensiveArmies = consumeExchange(state, defenderPlayer, defensiveCards);
-      to.armies += defensiveArmies;
-      state.messages.push(systemMessage(`${defenderPlayer.name} realizó un canje defensivo y reforzó ${COUNTRIES[toId].name} con ${defensiveArmies} ejércitos.`));
-    }
-  }
   const attackerCount = Math.min(3, from.armies - 1, requestedDice ?? 3);
   const defenderCount = Math.min(3, to.armies);
   const attackerDice = rollDice(attackerCount);
@@ -345,11 +360,14 @@ function attack(state: GameState, fromId: number, toId: number, requestedDice?: 
   if (to.armies <= 0) {
     conquered = true;
     const priorOwnerId = to.ownerId;
-    const moved = Math.max(1, Math.min(attackerCount, from.armies - 1));
+    const maximum = Math.max(1, Math.min(3, from.armies - 1));
+    const moved = 1;
     to.ownerId = attacker.id;
     to.armies = moved;
     from.armies -= moved;
     attacker.countriesConqueredThisTurn += 1;
+    state.pendingConquest = { from: fromId, to: toId, minimum: 1, maximum, moved };
+    state.phase = "occupy";
 
     if (ownedCountries(state, priorOwnerId).length === 0) {
       defenderPlayer.eliminated = true;
@@ -361,10 +379,11 @@ function attack(state: GameState, fromId: number, toId: number, requestedDice?: 
       }
       state.players.forEach((player, index) => {
         if (player.id === attacker.id || player.eliminated || player.missionId !== `destroy:${defenderPlayer.color}`) return;
-        const fallbackIndex = nextLivingIndex(state, index);
-        const fallback = state.players[fallbackIndex];
-        if (fallback && fallback.id !== player.id) player.missionId = `destroy:${fallback.color}`;
+        player.missionId = "common-30";
       });
+      if (state.players[state.roundStarterIndex]?.eliminated) {
+        state.roundStarterIndex = nextLivingIndex(state, state.roundStarterIndex);
+      }
     }
   }
   state.lastBattle = { from: fromId, to: toId, attackerDice, defenderDice, attackerLosses, defenderLosses, conquered };
@@ -379,31 +398,76 @@ function attack(state: GameState, fromId: number, toId: number, requestedDice?: 
   resetDeadline(state);
 }
 
+function occupy(state: GameState, count: number) {
+  if (state.phase !== "occupy" || !state.pendingConquest) {
+    throw new Error("No hay un territorio pendiente de ocupación.");
+  }
+  const pending = state.pendingConquest;
+  if (!Number.isInteger(count) || count < pending.minimum || count > pending.maximum) {
+    throw new Error(`Debés mover entre ${pending.minimum} y ${pending.maximum} ejércitos.`);
+  }
+  const additional = count - pending.moved;
+  const from = state.countries[pending.from];
+  const to = state.countries[pending.to];
+  if (additional > from.armies - 1) throw new Error("Debe quedar al menos un ejército en el territorio atacante.");
+  from.armies -= additional;
+  to.armies += additional;
+  state.pendingConquest = null;
+  state.phase = "attack";
+  resetDeadline(state);
+}
+
+function claimOwnedCardBonuses(state: GameState, player: PlayerState) {
+  for (const card of player.cards) {
+    if (card.used || state.countries[card.countryId].ownerId !== player.id) continue;
+    state.countries[card.countryId].armies += 2;
+    card.used = true;
+    state.messages.push(systemMessage(`${player.name} utilizó la tarjeta de ${COUNTRIES[card.countryId].name} y sumó 2 ejércitos allí.`));
+  }
+}
+
 function awardCard(state: GameState, player: PlayerState) {
-  if (player.countriesConqueredThisTurn < 1) return;
+  const requiredConquests = player.exchanges >= 3 ? 2 : 1;
+  if (player.countriesConqueredThisTurn < requiredConquests) return;
+  if (player.cards.length >= 5) {
+    state.messages.push(systemMessage(`${player.name} no recibió tarjeta porque ya posee el máximo de 5.`));
+    return;
+  }
   if (state.deck.length === 0) {
-    state.deck = shuffle(state.discard);
+    state.deck = shuffle(state.discard.map((card) => ({ ...card, used: false })));
     state.discard = [];
   }
   const card = state.deck.pop();
   if (!card) return;
+  card.used = false;
   player.cards.push(card);
   const cardCountry = state.countries[card.countryId];
   if (cardCountry.ownerId === player.id) {
     cardCountry.armies += 2;
+    card.used = true;
     state.messages.push(systemMessage(`${player.name} recibió ${COUNTRIES[card.countryId].name} y sumó 2 ejércitos allí.`));
   }
 }
 
-function beginNextTurn(state: GameState) {
+function beginNextCombatTurn(state: GameState) {
   const oldIndex = state.activePlayerIndex;
-  state.activePlayerIndex = nextLivingIndex(state, oldIndex);
-  if (state.activePlayerIndex <= oldIndex) state.round += 1;
+  const nextIndex = nextLivingIndex(state, oldIndex);
+  if (nextIndex === state.roundStarterIndex) {
+    state.roundStarterIndex = nextLivingIndex(state, state.roundStarterIndex);
+    state.activePlayerIndex = state.roundStarterIndex;
+    state.round += 1;
+    state.roundStage = "reinforce";
+    state.phase = "reinforce";
+    beginReinforcements(state, activePlayer(state).id);
+    state.messages.push(systemMessage(`Comienza la ronda ${state.round}. Todos los reinos deben colocar sus refuerzos.`));
+  } else {
+    state.activePlayerIndex = nextIndex;
+    state.phase = "attack";
+  }
   const player = activePlayer(state);
   player.countriesConqueredThisTurn = 0;
-  state.phase = "reinforce";
-  beginReinforcements(state, player.id);
   state.lastBattle = null;
+  state.pendingConquest = null;
   state.regroupLocked = {};
   resetDeadline(state);
 }
@@ -411,8 +475,9 @@ function beginNextTurn(state: GameState) {
 function endTurn(state: GameState) {
   if (!["attack", "regroup"].includes(state.phase)) throw new Error("No se puede finalizar ahora.");
   const player = activePlayer(state);
+  claimOwnedCardBonuses(state, player);
   awardCard(state, player);
-  beginNextTurn(state);
+  beginNextCombatTurn(state);
 }
 
 function regroup(state: GameState, fromId: number, toId: number, count: number) {
@@ -422,7 +487,7 @@ function regroup(state: GameState, fromId: number, toId: number, count: number) 
   const from = state.countries[fromId];
   const to = state.countries[toId];
   if (from.ownerId !== player.id || to.ownerId !== player.id) throw new Error("Ambos territorios deben ser propios.");
-  const movable = Math.min(3, from.armies - 1 - (state.regroupLocked[fromId] ?? 0));
+  const movable = from.armies - 1 - (state.regroupLocked[fromId] ?? 0);
   if (!Number.isInteger(count) || count < 1 || count > movable) throw new Error("Cantidad inválida.");
   from.armies -= count;
   to.armies += count;
@@ -431,14 +496,14 @@ function regroup(state: GameState, fromId: number, toId: number, count: number) 
 }
 
 function exchange(state: GameState, ids: number[]) {
-  if (!["reinforce", "attack"].includes(state.phase)) throw new Error("No podés canjear ahora.");
+  if (state.phase !== "reinforce") throw new Error("El canje se realiza durante la fase de refuerzos.");
   const player = activePlayer(state);
+  if (ids.length !== 3 || new Set(ids).size !== 3) throw new Error("Debés elegir tres tarjetas diferentes.");
   const cards = ids.map((id) => player.cards.find((card) => card.countryId === id)).filter(Boolean) as CountryCard[];
   if (!validExchange(cards)) throw new Error("La combinación de tarjetas no es válida.");
   const value = consumeExchange(state, player, cards);
   state.reinforcements += value;
   state.baseReinforcements += value;
-  if (state.phase === "attack") state.phase = "reinforce";
   state.messages.push(systemMessage(`${player.name} realizó un canje por ${value} ejércitos.`));
   resetDeadline(state);
 }
@@ -513,6 +578,9 @@ export function applyAction(state: GameState, actorId: string, action: GameActio
     case "attack":
       attack(state, action.from, action.to, action.dice);
       break;
+    case "occupy":
+      occupy(state, action.count);
+      break;
     case "end-attack":
       if (state.phase !== "attack") throw new Error("No es la fase de ataque.");
       state.phase = "regroup";
@@ -560,6 +628,8 @@ export function handleTimeout(state: GameState): GameState {
       place(state, country.id, 1);
       if (activePlayer(state).id !== player.id) break;
     }
+  } else if (state.phase === "occupy") {
+    occupy(state, state.pendingConquest?.minimum ?? 1);
   } else if (state.phase === "attack") {
     state.phase = "regroup";
     endTurn(state);
@@ -577,12 +647,25 @@ export function runBotStep(state: GameState): GameState {
   if (!player.isBot && player.connected) return state;
 
   if (["setup-5", "setup-3", "reinforce"].includes(state.phase)) {
+    if (player.isBot && state.phase === "reinforce") {
+      const exchangeCards = findValidExchangeCards(player.cards);
+      if (exchangeCards) {
+        return applyAction(state, player.id, {
+          type: "exchange",
+          cardCountryIds: exchangeCards.map((card) => card.countryId)
+        });
+      }
+    }
     const owned = ownedCountries(state, player.id);
     const requiredContinent = Object.entries(state.continentReinforcements)
       .find(([, value]) => (value ?? 0) > 0)?.[0] as ContinentId | undefined;
     const eligible = requiredContinent
       ? owned.filter((country) => COUNTRIES[country.id].continent === requiredContinent)
       : owned;
+    if (!player.isBot) {
+      const randomCountry = eligible[Math.floor(Math.random() * eligible.length)];
+      return applyAction(state, player.id, { type: "place", countryId: randomCountry.id, count: 1 });
+    }
     const border = eligible.filter((country) =>
       (ADJACENCY[country.id] ?? []).some((neighbor) => state.countries[neighbor].ownerId !== player.id)
     );
@@ -592,7 +675,14 @@ export function runBotStep(state: GameState): GameState {
     const count = requiredContinent ? continentAvailable : state.baseReinforcements;
     return applyAction(state, player.id, { type: "place", countryId: weakest.id, count: Math.max(1, count) });
   }
+  if (state.phase === "occupy") {
+    return applyAction(state, player.id, {
+      type: "occupy",
+      count: player.isBot ? state.pendingConquest?.maximum ?? 1 : state.pendingConquest?.minimum ?? 1
+    });
+  }
   if (state.phase === "attack") {
+    if (!player.isBot) return applyAction(state, player.id, { type: "end-attack" });
     const possible = ownedCountries(state, player.id)
       .flatMap((from) =>
         (ADJACENCY[from.id] ?? []).map((toId) => ({ from, to: state.countries[toId] }))

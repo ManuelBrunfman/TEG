@@ -275,7 +275,7 @@ function CreateOnline({ session, onBack, onCreated }: { session: Session; onBack
         <label className="toggle-row"><input type="checkbox" checked={spectators} onChange={(e) => setSpectators(e.target.checked)} /><span>Permitir espectadores</span></label>
         <button className="button button--large" onClick={async () => {
           try {
-            const settings: GameSettings = { visibility, maxPlayers, turnSeconds, spectators, defensiveExchange: true };
+            const settings: GameSettings = { visibility, maxPlayers, turnSeconds, spectators, defensiveExchange: false };
             onCreated(await api.createGame(name, session, settings));
           } catch (caught) { setError(caught instanceof Error ? caught.message : "No se pudo crear."); }
         }}>Crear mesa</button>
@@ -301,7 +301,7 @@ function CreateLocal({ session, onBack, onCreated }: { session: Session; onBack:
         </div>
         <button className="button button--large" onClick={() => {
           const host: Session = { ...session, id: "local-0" };
-          const settings: GameSettings = { visibility: "local", maxPlayers: count, turnSeconds: 120, spectators: false, defensiveExchange: true };
+          const settings: GameSettings = { visibility: "local", maxPlayers: count, turnSeconds: 120, spectators: false, defensiveExchange: false };
           const localGame = createGame({ name: "Campaña local", host, settings });
           localGame.players[0].name = names[0];
           for (let index = 1; index < count; index += 1) {

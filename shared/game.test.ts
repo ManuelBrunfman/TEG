@@ -9,7 +9,7 @@ const settings: GameSettings = {
   maxPlayers: 2,
   turnSeconds: 120,
   spectators: true,
-  defensiveExchange: true
+  defensiveExchange: false
 };
 
 const host: Session = {
@@ -25,6 +25,14 @@ function startedGame() {
   addPlayer(game, { id: "player-two", name: "Beto", avatar: "🛡️" });
   startGame(game);
   return game;
+}
+
+function finishInitialPlacement(game: ReturnType<typeof startedGame>) {
+  while (game.phase === "setup-5" || game.phase === "setup-3") {
+    const player = game.players[game.activePlayerIndex];
+    const country = game.countries.find((item) => item.ownerId === player.id)!;
+    applyAction(game, player.id, { type: "place", countryId: country.id, count: game.reinforcements });
+  }
 }
 
 describe("motor de Reinos en Guerra", () => {
@@ -48,16 +56,44 @@ describe("motor de Reinos en Guerra", () => {
     ));
   });
 
-  it("completa las rondas iniciales de 5 y 3 ejércitos", () => {
+  it("completa las disposiciones iniciales y comienza atacando sin nuevos refuerzos", () => {
     const game = startedGame();
-    for (let round = 0; round < 4; round += 1) {
-      const player = game.players[game.activePlayerIndex];
-      const country = game.countries.find((item) => item.ownerId === player.id)!;
-      applyAction(game, player.id, { type: "place", countryId: country.id, count: game.reinforcements });
-    }
-    assert.equal(game.phase, "reinforce");
+    finishInitialPlacement(game);
+    assert.equal(game.phase, "attack");
     assert.equal(game.round, 1);
-    assert.ok(game.reinforcements > 0);
+    assert.equal(game.reinforcements, 0);
+    assert.equal(game.roundStage, "combat");
+  });
+
+  it("otorga un mínimo de 3 refuerzos y separa la colocación de los ataques", () => {
+    const game = startedGame();
+    const first = game.players[0];
+    const second = game.players[1];
+    game.roundStarterIndex = 0;
+    game.activePlayerIndex = 0;
+    game.roundStage = "combat";
+    game.round = 1;
+    game.phase = "regroup";
+    game.countries.forEach((country) => {
+      country.ownerId = first.id;
+      country.armies = 1;
+    });
+    game.countries[1].ownerId = second.id;
+
+    applyAction(game, first.id, { type: "end-turn" });
+    assert.equal(game.phase, "attack");
+    assert.equal(game.activePlayerIndex, 1);
+
+    game.phase = "regroup";
+    applyAction(game, second.id, { type: "end-turn" });
+    assert.equal(game.phase, "reinforce");
+    assert.equal(game.round, 2);
+    assert.equal(game.activePlayerIndex, 1);
+    assert.equal(game.baseReinforcements, 3);
+
+    applyAction(game, second.id, { type: "place", countryId: 1, count: 3 });
+    assert.equal(game.phase, "reinforce");
+    assert.equal(game.activePlayerIndex, 0);
   });
 
   it("obliga a ubicar el bonus continental dentro del continente conquistado", () => {
@@ -66,6 +102,7 @@ describe("motor de Reinos en Guerra", () => {
     const rival = game.players[1];
 
     game.activePlayerIndex = 0;
+    game.roundStarterIndex = 1;
     game.phase = "reinforce";
     game.countries.forEach((country) => {
       country.ownerId = rival.id;
@@ -93,7 +130,7 @@ describe("motor de Reinos en Guerra", () => {
     assert.equal(game.baseReinforcements, 0);
   });
 
-  it("resuelve dados ordenados y conquista al eliminar la última defensa", () => {
+  it("resuelve dados y permite elegir de 1 a 3 ejércitos para ocupar", () => {
     const game = startedGame();
     game.phase = "attack";
     game.activePlayerIndex = 0;
@@ -112,6 +149,11 @@ describe("motor de Reinos en Guerra", () => {
       applyAction(game, attacker.id, { type: "attack", from: 0, to: 1 });
       assert.equal(game.countries[1].ownerId, attacker.id);
       assert.equal(game.lastBattle?.conquered, true);
+      assert.equal(game.phase, "occupy");
+      assert.deepEqual([game.pendingConquest?.minimum, game.pendingConquest?.maximum], [1, 3]);
+      applyAction(game, attacker.id, { type: "occupy", count: 3 });
+      assert.equal(game.phase, "attack");
+      assert.equal(game.countries[1].armies, 3);
     } finally {
       Math.random = originalRandom;
     }
@@ -131,7 +173,7 @@ describe("motor de Reinos en Guerra", () => {
     );
   });
 
-  it("aplica el canje defensivo antes de tirar los dados", () => {
+  it("no realiza canjes automáticos al defensor", () => {
     const game = startedGame();
     game.phase = "attack";
     game.activePlayerIndex = 0;
@@ -144,22 +186,155 @@ describe("motor de Reinos en Guerra", () => {
     game.countries[0].ownerId = attacker.id;
     game.countries[0].armies = 6;
     defender.cards = [
-      { countryId: 6, symbol: "cañón" },
-      { countryId: 7, symbol: "cañón" },
-      { countryId: 8, symbol: "cañón" }
+      { countryId: 6, symbol: "cañón", used: false },
+      { countryId: 7, symbol: "cañón", used: false },
+      { countryId: 8, symbol: "cañón", used: false }
     ];
     const originalRandom = Math.random;
-    const rolls = [0.99, 0.99, 0.99, 0, 0, 0];
+    const rolls = [0.99, 0.99, 0.99, 0];
     Math.random = () => rolls.shift() ?? 0;
     try {
       applyAction(game, attacker.id, { type: "attack", from: 0, to: 1 });
-      assert.equal(defender.cards.length, 0);
-      assert.equal(defender.exchanges, 1);
-      assert.equal(game.countries[1].ownerId, defender.id);
-      assert.ok(game.countries[1].armies >= 2);
+      assert.equal(defender.cards.length, 3);
+      assert.equal(defender.exchanges, 0);
+      assert.equal(game.countries[1].ownerId, attacker.id);
     } finally {
       Math.random = originalRandom;
     }
+  });
+
+  it("suma una sola vez los 2 ejércitos al conquistar un país cuya tarjeta conserva", () => {
+    const game = startedGame();
+    game.phase = "attack";
+    game.activePlayerIndex = 0;
+    game.roundStarterIndex = 0;
+    const attacker = game.players[0];
+    const defender = game.players[1];
+    game.countries.forEach((country) => {
+      country.ownerId = defender.id;
+      country.armies = 1;
+    });
+    game.countries[0].ownerId = attacker.id;
+    game.countries[0].armies = 6;
+    attacker.cards = [{ countryId: 1, symbol: "galeón", used: false }];
+    const originalRandom = Math.random;
+    const rolls = [0.99, 0.99, 0.99, 0];
+    Math.random = () => rolls.shift() ?? 0;
+    try {
+      applyAction(game, attacker.id, { type: "attack", from: 0, to: 1 });
+      applyAction(game, attacker.id, { type: "occupy", count: 1 });
+      applyAction(game, attacker.id, { type: "end-attack" });
+      applyAction(game, attacker.id, { type: "end-turn" });
+      assert.equal(game.countries[1].armies, 3);
+      assert.equal(attacker.cards[0].used, true);
+    } finally {
+      Math.random = originalRandom;
+    }
+  });
+
+  it("permite elegir manualmente tres cartas válidas sólo durante refuerzos", () => {
+    const game = startedGame();
+    const player = game.players[0];
+    game.activePlayerIndex = 0;
+    game.roundStarterIndex = 1;
+    game.phase = "reinforce";
+    game.reinforcements = 3;
+    game.baseReinforcements = 3;
+    player.cards = [
+      { countryId: 6, symbol: "cañón", used: false },
+      { countryId: 7, symbol: "cañón", used: false },
+      { countryId: 8, symbol: "cañón", used: false },
+      { countryId: 9, symbol: "galeón", used: false }
+    ];
+
+    assert.throws(
+      () => applyAction(game, player.id, { type: "exchange", cardCountryIds: [6, 6, 6] }),
+      /tres tarjetas diferentes/
+    );
+    applyAction(game, player.id, { type: "exchange", cardCountryIds: [6, 7, 8] });
+    assert.equal(player.cards.length, 1);
+    assert.equal(player.exchanges, 1);
+    assert.equal(game.baseReinforcements, 7);
+    assert.equal(game.reinforcements, 7);
+
+    game.phase = "attack";
+    assert.throws(
+      () => applyAction(game, player.id, { type: "exchange", cardCountryIds: [6, 7, 8] }),
+      /fase de refuerzos/
+    );
+
+    const distinctGame = startedGame();
+    const distinctPlayer = distinctGame.players[0];
+    distinctGame.activePlayerIndex = 0;
+    distinctGame.phase = "reinforce";
+    distinctGame.reinforcements = 3;
+    distinctGame.baseReinforcements = 3;
+    distinctPlayer.cards = [
+      { countryId: 6, symbol: "cañón", used: false },
+      { countryId: 9, symbol: "galeón", used: false },
+      { countryId: 11, symbol: "globo", used: false }
+    ];
+    applyAction(distinctGame, distinctPlayer.id, { type: "exchange", cardCountryIds: [6, 9, 11] });
+    assert.equal(distinctPlayer.cards.length, 0);
+  });
+
+  it("exige dos conquistas para recibir tarjeta desde el tercer canje y nunca supera cinco", () => {
+    const game = startedGame();
+    const player = game.players[0];
+    game.activePlayerIndex = 0;
+    game.roundStarterIndex = 0;
+    game.phase = "regroup";
+    player.exchanges = 3;
+    player.countriesConqueredThisTurn = 1;
+    game.deck = [{ countryId: 49, symbol: "cañón", used: false }];
+    applyAction(game, player.id, { type: "end-turn" });
+    assert.equal(player.cards.length, 0);
+
+    game.activePlayerIndex = 0;
+    game.phase = "regroup";
+    player.countriesConqueredThisTurn = 2;
+    player.cards = [
+      { countryId: 6, symbol: "cañón", used: false },
+      { countryId: 7, symbol: "cañón", used: false },
+      { countryId: 8, symbol: "cañón", used: false },
+      { countryId: 9, symbol: "galeón", used: false },
+      { countryId: 10, symbol: "galeón", used: false }
+    ];
+    applyAction(game, player.id, { type: "end-turn" });
+    assert.equal(player.cards.length, 5);
+  });
+
+  it("permite reagrupar más de tres ejércitos sin volver a mover los recibidos", () => {
+    const game = startedGame();
+    const player = game.players[0];
+    game.activePlayerIndex = 0;
+    game.phase = "regroup";
+    game.countries[0].ownerId = player.id;
+    game.countries[1].ownerId = player.id;
+    game.countries[0].armies = 10;
+    game.countries[1].armies = 1;
+    applyAction(game, player.id, { type: "regroup", from: 0, to: 1, count: 7 });
+    assert.equal(game.countries[0].armies, 3);
+    assert.equal(game.countries[1].armies, 8);
+    assert.throws(
+      () => applyAction(game, player.id, { type: "regroup", from: 1, to: 0, count: 1 }),
+      /Cantidad inválida/
+    );
+  });
+
+  it("el jugador desconectado coloca fichas pero no ataca automáticamente", () => {
+    const game = startedGame();
+    const player = game.players[0];
+    player.connected = false;
+    game.activePlayerIndex = 0;
+    game.phase = "attack";
+    game.countries[0].ownerId = player.id;
+    game.countries[0].armies = 20;
+    game.countries[1].ownerId = game.players[1].id;
+    game.countries[1].armies = 1;
+    runBotStep(game);
+    assert.equal(game.phase, "regroup");
+    assert.equal(game.lastBattle, null);
   });
 
   it("pausa una partida privada solamente con acuerdo unánime", () => {
@@ -204,6 +379,7 @@ describe("motor de Reinos en Guerra", () => {
           assert.ok(game.countries.every((country) => validOwners.has(country.ownerId)));
           assert.ok(game.countries.every((country) => Number.isInteger(country.armies) && country.armies >= 1));
           assert.ok(game.activePlayerIndex >= 0 && game.activePlayerIndex < game.players.length);
+          assert.ok(game.players.every((player) => player.cards.length <= 50));
         }
 
         assert.equal(game.status, "finished", `la simulación de ${playerCount} jugadores superó 100.000 acciones`);

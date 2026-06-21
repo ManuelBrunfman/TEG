@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { ADJACENCY, CONTINENTS, COUNTRIES, areAdjacent } from "@shared/map";
 import { missionText } from "@shared/missions";
-import { applyAction, findValidExchangeCards, handleTimeout, runBotStep } from "@shared/game";
+import { applyAction, findValidExchangeCards, handleTimeout, runBotStep, validExchange } from "@shared/game";
 import type { GameAction, GameState, Session } from "@shared/types";
 import { api, type FriendsState } from "../api";
 import { MapBoard } from "./MapBoard";
@@ -19,6 +19,7 @@ const phaseText: Record<GameState["phase"], string> = {
   "setup-3": "Segunda disposición · 3 ejércitos",
   reinforce: "Refuerzos",
   attack: "Ataque",
+  occupy: "Ocupación",
   regroup: "Reagrupamiento",
   finished: "Campaña finalizada"
 };
@@ -28,13 +29,24 @@ const phaseDetails: Record<GameState["phase"], { icon: string; kind: string; ste
   "setup-3": { icon: "⚑", kind: "placement", step: 1, instruction: "Tocá un territorio propio para completar la disposición inicial." },
   reinforce: { icon: "♜", kind: "placement", step: 1, instruction: "Ubicá todos tus refuerzos antes de atacar." },
   attack: { icon: "⚔", kind: "attack", step: 2, instruction: "Elegí un territorio propio y luego un enemigo limítrofe." },
-  regroup: { icon: "↔", kind: "regroup", step: 3, instruction: "Mové hasta 3 ejércitos entre territorios propios o finalizá el turno." },
+  occupy: { icon: "⚑", kind: "attack", step: 2, instruction: "Elegí cuántos ejércitos pasan al territorio conquistado." },
+  regroup: { icon: "↔", kind: "regroup", step: 3, instruction: "Elegí dos territorios propios limítrofes y la cantidad que querés mover." },
   finished: { icon: "♛", kind: "finished", step: 3, instruction: "La campaña ha finalizado." }
 };
 
 export function GameView({ initialGame, session, local, onExit }: Props) {
   const [game, setGame] = useState<GameState>(() => ({
     ...initialGame,
+    players: initialGame.players.map((player) => ({
+      ...player,
+      cards: player.cards.map((card) => ({
+        ...card,
+        used: card.used ?? (initialGame.countries[card.countryId]?.ownerId === player.id)
+      }))
+    })),
+    roundStarterIndex: initialGame.roundStarterIndex ?? initialGame.activePlayerIndex,
+    roundStage: initialGame.roundStage ?? (initialGame.phase === "reinforce" ? "reinforce" : "combat"),
+    pendingConquest: initialGame.pendingConquest ?? null,
     baseReinforcements: initialGame.baseReinforcements ?? initialGame.reinforcements,
     continentReinforcements: initialGame.continentReinforcements ?? {},
     paused: initialGame.paused ?? false,
@@ -46,6 +58,9 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   const [error, setError] = useState("");
   const [tab, setTab] = useState<"ordenes" | "chat" | "cartas" | "pactos">("ordenes");
   const [chat, setChat] = useState("");
+  const [selectedCardIds, setSelectedCardIds] = useState<number[]>([]);
+  const [regroupDraft, setRegroupDraft] = useState<{ from: number; to: number; maximum: number } | null>(null);
+  const [regroupCount, setRegroupCount] = useState(1);
   const [chatStatus, setChatStatus] = useState<"connecting" | "connected" | "disconnected" | "sending">("connecting");
   const [colorBlind, setColorBlind] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
@@ -62,6 +77,11 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   useEffect(() => {
     if (local && active && !active.isBot) setLocalRevealed(false);
   }, [active?.id, local]);
+
+  useEffect(() => {
+    setSelectedCardIds([]);
+    setRegroupDraft(null);
+  }, [game.activePlayerIndex, game.phase]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 250);
@@ -96,6 +116,12 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
     socket.on("game:state", (next: GameState) => {
       setGame(next);
       setSelected(null);
+      setRegroupDraft(null);
+      setSelectedCardIds((current) =>
+        current.filter((countryId) =>
+          next.players.find((player) => player.id === session.id)?.cards.some((card) => card.countryId === countryId)
+        )
+      );
     });
     socket.on("game:error", setError);
     return () => {
@@ -141,6 +167,8 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
         applyAction(next, active.id, action);
         setGame(next);
         setSelected(null);
+        setRegroupDraft(null);
+        if (action.type === "exchange") setSelectedCardIds([]);
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : "Acción inválida.");
       }
@@ -157,6 +185,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
 
   const selectCountry = (countryId: number) => {
     if (!isMyTurn || game.status !== "playing") return;
+    if (game.phase === "occupy") return;
     const country = game.countries[countryId];
     if (["setup-5", "setup-3", "reinforce"].includes(game.phase)) {
       if (country.ownerId === active.id) dispatch({ type: "place", countryId, count: 1 });
@@ -183,8 +212,11 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
       else dispatch({ type: "attack", from: selected, to: countryId });
     } else if (game.phase === "regroup") {
       if (from.ownerId === active.id && country.ownerId === active.id) {
-        const amount = Math.min(3, from.armies - 1 - (game.regroupLocked[selected] ?? 0));
-        if (amount > 0) dispatch({ type: "regroup", from: selected, to: countryId, count: amount });
+        const maximum = from.armies - 1 - (game.regroupLocked[selected] ?? 0);
+        if (maximum > 0) {
+          setRegroupDraft({ from: selected, to: countryId, maximum });
+          setRegroupCount(maximum);
+        }
         else setError("Esos ejércitos ya fueron reagrupados o deben dejar una ficha en origen.");
       } else setError("El reagrupamiento se realiza entre territorios propios.");
     }
@@ -194,6 +226,9 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   const selectedState = selected === null ? null : game.countries[selected];
   const myCards = me?.cards ?? [];
   const validCardSet = findValidExchangeCards(myCards);
+  const selectedCards = myCards.filter((card) => selectedCardIds.includes(card.countryId));
+  const selectedExchangeValid = validExchange(selectedCards);
+  const nextExchangeValue = !me ? 4 : me.exchanges === 0 ? 4 : me.exchanges === 1 ? 7 : me.exchanges === 2 ? 10 : 10 + (me.exchanges - 2) * 5;
   const selectedName = selected === null ? "" : COUNTRIES[selected].name;
   const selectedContinent = selected === null ? null : COUNTRIES[selected].continent;
   const selectedPlacementAvailable = selectedContinent === null
@@ -409,9 +444,54 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                   </button>
                 </>
               )}
+              {game.phase === "occupy" && game.pendingConquest && (
+                <div className="occupation-choice">
+                  <p>
+                    Conquistaste <strong>{COUNTRIES[game.pendingConquest.to].name}</strong>. Elegí cuántos ejércitos pasan desde{" "}
+                    <strong>{COUNTRIES[game.pendingConquest.from].name}</strong>.
+                  </p>
+                  <div className="choice-buttons">
+                    {Array.from(
+                      { length: game.pendingConquest.maximum - game.pendingConquest.minimum + 1 },
+                      (_, index) => game.pendingConquest!.minimum + index
+                    ).map((count) => (
+                      <button className="button" disabled={!isMyTurn} key={count} onClick={() => dispatch({ type: "occupy", count })}>
+                        Mover {count}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {game.phase === "regroup" && (
                 <>
-                  <p>Elegí dos territorios propios limítrofes. Se moverán hasta 3 ejércitos y no podrán volver a moverse en este turno.</p>
+                  <p>Elegí origen y destino. Podés mover todos los ejércitos disponibles, dejando uno en origen. Una ficha movida no puede volver a moverse este turno.</p>
+                  {regroupDraft && (
+                    <div className="regroup-choice">
+                      <strong>{COUNTRIES[regroupDraft.from].name} → {COUNTRIES[regroupDraft.to].name}</strong>
+                      <label>
+                        <span>Cantidad: {regroupCount}</span>
+                        <input
+                          type="range"
+                          min="1"
+                          max={regroupDraft.maximum}
+                          value={regroupCount}
+                          onChange={(event) => setRegroupCount(Number(event.target.value))}
+                        />
+                      </label>
+                      <div className="button-row">
+                        <button className="button" onClick={() => dispatch({
+                          type: "regroup",
+                          from: regroupDraft.from,
+                          to: regroupDraft.to,
+                          count: regroupCount
+                        })}>Mover ejércitos</button>
+                        <button className="button button--secondary" onClick={() => {
+                          setRegroupDraft(null);
+                          setSelected(null);
+                        }}>Cancelar</button>
+                      </div>
+                    </div>
+                  )}
                   <button className="button" disabled={!isMyTurn} onClick={() => dispatch({ type: "end-turn" })}>Finalizar turno</button>
                 </>
               )}
@@ -438,19 +518,42 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
           {tab === "cartas" && (
             <div className="command-content">
               <h2>Tarjetas de territorio</h2>
+              {game.phase === "reinforce" && isMyTurn && validCardSet && (
+                <p className={myCards.length >= 5 ? "card-warning" : "muted"}>
+                  {myCards.length >= 5
+                    ? "Tenés 5 tarjetas. Elegí tres válidas para canjear; mientras conserves cinco no recibirás otra."
+                    : "Podés seleccionar manualmente tres iguales o tres diferentes."}
+                </p>
+              )}
               <div className="card-list">
                 {myCards.map((card) => (
-                  <div className="country-card" key={card.countryId}>
+                  <button
+                    type="button"
+                    className={`country-card ${selectedCardIds.includes(card.countryId) ? "country-card--selected" : ""}`}
+                    disabled={game.phase !== "reinforce" || !isMyTurn}
+                    key={card.countryId}
+                    onClick={() => setSelectedCardIds((current) => {
+                      if (current.includes(card.countryId)) return current.filter((id) => id !== card.countryId);
+                      if (current.length >= 3) return current;
+                      return [...current, card.countryId];
+                    })}
+                  >
                     <span>{card.symbol === "cañón" ? "☄" : card.symbol === "galeón" ? "⛵" : card.symbol === "globo" ? "◉" : "★"}</span>
                     <strong>{COUNTRIES[card.countryId].name}</strong>
-                    <small>{card.symbol}</small>
-                  </div>
+                    <small>{card.symbol} · {card.used ? "premio usado" : "premio disponible"}</small>
+                  </button>
                 ))}
                 {!myCards.length && <p className="muted">Todavía no obtuviste tarjetas.</p>}
               </div>
-              {validCardSet && (
-                <button className="button" onClick={() => dispatch({ type: "exchange", cardCountryIds: validCardSet.map((card) => card.countryId) })}>
-                  Canjear combinación válida
+              {game.phase === "reinforce" && isMyTurn && validCardSet && (
+                <button
+                  className="button"
+                  disabled={!selectedExchangeValid}
+                  onClick={() => dispatch({ type: "exchange", cardCountryIds: selectedCardIds })}
+                >
+                  {selectedCardIds.length === 3
+                    ? selectedExchangeValid ? `Canjear por ${nextExchangeValue} ejércitos` : "La combinación no es válida"
+                    : `Seleccioná 3 tarjetas (${selectedCardIds.length}/3)`}
                 </button>
               )}
             </div>

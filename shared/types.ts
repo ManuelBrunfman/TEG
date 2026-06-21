@@ -1,6 +1,6 @@
 export type Visibility = "public" | "private" | "local";
 export type GameStatus = "lobby" | "playing" | "finished";
-export type Phase = "setup-5" | "setup-3" | "reinforce" | "attack" | "regroup" | "finished";
+export type Phase = "setup-5" | "setup-3" | "reinforce" | "attack" | "occupy" | "regroup" | "finished";
 export type CardSymbol = "cañón" | "galeón" | "globo" | "comodín";
 export type PlayerColor = "azul" | "rojo" | "negro" | "amarillo" | "verde" | "magenta";
 export type ContinentId = "america-sur" | "america-norte" | "africa" | "oceania" | "europa" | "asia";
@@ -23,6 +23,7 @@ export interface CountryState {
 export interface CountryCard {
   countryId: number;
   symbol: CardSymbol;
+  used: boolean;
 }
 
 export interface PlayerState {
@@ -47,6 +48,14 @@ export interface BattleResult {
   attackerLosses: number;
   defenderLosses: number;
   conquered: boolean;
+}
+
+export interface PendingConquest {
+  from: number;
+  to: number;
+  minimum: number;
+  maximum: number;
+  moved: number;
 }
 
 export interface Pact {
@@ -86,6 +95,8 @@ export interface GameState {
   players: PlayerState[];
   countries: CountryState[];
   activePlayerIndex: number;
+  roundStarterIndex: number;
+  roundStage: "reinforce" | "combat";
   phase: Phase;
   setupRound: number;
   reinforcements: number;
@@ -97,6 +108,7 @@ export interface GameState {
   discard: CountryCard[];
   exchangeValue: number;
   lastBattle: BattleResult | null;
+  pendingConquest: PendingConquest | null;
   winnerId: string | null;
   winnerReason: string | null;
   messages: ChatMessage[];
@@ -122,6 +134,7 @@ export interface PublicGameSummary {
 export type GameAction =
   | { type: "place"; countryId: number; count: number }
   | { type: "attack"; from: number; to: number; dice?: number }
+  | { type: "occupy"; count: number }
   | { type: "end-attack" }
   | { type: "regroup"; from: number; to: number; count: number }
   | { type: "end-turn" }

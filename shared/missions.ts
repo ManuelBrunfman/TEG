@@ -55,6 +55,7 @@ export const OCCUPATION_MISSIONS: MissionDefinition[] = [
 
 export const missionText = (missionId: string) => {
   if (missionId === "world") return "Conquistar los 50 territorios.";
+  if (missionId === "common-30") return "Ocupar 30 territorios.";
   if (missionId.startsWith("destroy:")) {
     return `Destruir al ejército ${missionId.split(":")[1]}; si no fuera posible, eliminar al jugador de la derecha.`;
   }
