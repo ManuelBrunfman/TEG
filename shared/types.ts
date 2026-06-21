@@ -89,6 +89,8 @@ export interface GameState {
   phase: Phase;
   setupRound: number;
   reinforcements: number;
+  baseReinforcements: number;
+  continentReinforcements: Partial<Record<ContinentId, number>>;
   turnDeadline: number | null;
   round: number;
   deck: CountryCard[];

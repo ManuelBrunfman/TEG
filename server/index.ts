@@ -236,14 +236,27 @@ io.on("connection", (socket) => {
     }
   );
 
-  socket.on("game:chat", (payload: { gameId: string; playerId: string; text: string }) => {
-    try {
-      store.message(payload.gameId, payload.playerId, payload.text);
-      broadcast(payload.gameId);
-    } catch (error) {
-      socket.emit("game:error", error instanceof Error ? error.message : "No se pudo enviar.");
+  socket.on(
+    "game:chat",
+    (
+      payload: { gameId: string; playerId: string; text: string },
+      acknowledge?: (result: { ok: boolean; error?: string }) => void
+    ) => {
+      try {
+        const connection = socket.data as { gameId?: string; playerId?: string };
+        if (connection.gameId !== payload.gameId || connection.playerId !== payload.playerId) {
+          throw new Error("La conexión del chat no corresponde a este jugador.");
+        }
+        store.message(payload.gameId, payload.playerId, payload.text);
+        broadcast(payload.gameId);
+        acknowledge?.({ ok: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "No se pudo enviar.";
+        acknowledge?.({ ok: false, error: message });
+        socket.emit("game:error", message);
+      }
     }
-  });
+  );
 
   socket.on("disconnect", () => {
     const { gameId, playerId } = socket.data as { gameId?: string; playerId?: string };

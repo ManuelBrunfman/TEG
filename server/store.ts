@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   addPlayer,
   applyAction,
@@ -22,6 +23,8 @@ class GameStore {
       game.pauseVotes ??= [];
       game.pausedRemainingMs ??= null;
       game.regroupLocked ??= {};
+      game.baseReinforcements ??= game.reinforcements;
+      game.continentReinforcements ??= {};
       game.players.forEach((player) => {
         if (!player.isBot) player.connected = false;
       });
@@ -94,7 +97,7 @@ class GameStore {
     const clean = text.trim().slice(0, 400);
     if (!clean) return game;
     game.messages.push({
-      id: crypto.randomUUID(),
+      id: randomUUID(),
       playerId: actorId,
       playerName: player.name,
       text: clean,

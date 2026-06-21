@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
-import { ADJACENCY, COUNTRIES, areAdjacent } from "@shared/map";
+import { ADJACENCY, CONTINENTS, COUNTRIES, areAdjacent } from "@shared/map";
 import { missionText } from "@shared/missions";
 import { applyAction, findValidExchangeCards, handleTimeout, runBotStep } from "@shared/game";
 import type { GameAction, GameState, Session } from "@shared/types";
@@ -35,6 +35,8 @@ const phaseDetails: Record<GameState["phase"], { icon: string; kind: string; ste
 export function GameView({ initialGame, session, local, onExit }: Props) {
   const [game, setGame] = useState<GameState>(() => ({
     ...initialGame,
+    baseReinforcements: initialGame.baseReinforcements ?? initialGame.reinforcements,
+    continentReinforcements: initialGame.continentReinforcements ?? {},
     paused: initialGame.paused ?? false,
     pauseVotes: initialGame.pauseVotes ?? [],
     pausedRemainingMs: initialGame.pausedRemainingMs ?? null,
@@ -44,6 +46,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   const [error, setError] = useState("");
   const [tab, setTab] = useState<"ordenes" | "chat" | "cartas" | "pactos">("ordenes");
   const [chat, setChat] = useState("");
+  const [chatStatus, setChatStatus] = useState<"connecting" | "connected" | "disconnected" | "sending">("connecting");
   const [colorBlind, setColorBlind] = useState(false);
   const [soundOn, setSoundOn] = useState(true);
   const [pactCountryId, setPactCountryId] = useState<number | "">("");
@@ -85,7 +88,11 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
     if (local) return;
     const socket = io();
     socketRef.current = socket;
-    socket.emit("game:watch", { gameId: game.id, playerId: session.id });
+    socket.on("connect", () => {
+      socket.emit("game:watch", { gameId: game.id, playerId: session.id });
+      setChatStatus("connected");
+    });
+    socket.on("disconnect", () => setChatStatus("disconnected"));
     socket.on("game:state", (next: GameState) => {
       setGame(next);
       setSelected(null);
@@ -188,6 +195,10 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   const myCards = me?.cards ?? [];
   const validCardSet = findValidExchangeCards(myCards);
   const selectedName = selected === null ? "" : COUNTRIES[selected].name;
+  const selectedContinent = selected === null ? null : COUNTRIES[selected].continent;
+  const selectedPlacementAvailable = selectedContinent === null
+    ? 0
+    : game.baseReinforcements + (game.continentReinforcements[selectedContinent] ?? 0);
   const winner = game.players.find((player) => player.id === game.winnerId);
   const canStart = game.status === "lobby" && game.hostId === session.id;
   const phase = phaseDetails[game.phase];
@@ -200,8 +211,30 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
 
   const sendChat = () => {
     if (!chat.trim() || local) return;
-    socketRef.current?.emit("game:chat", { gameId: game.id, playerId: session.id, text: chat });
-    setChat("");
+    const socket = socketRef.current;
+    if (!socket?.connected) {
+      setError("El chat está desconectado. Esperá a que se restablezca la conexión.");
+      setChatStatus("disconnected");
+      return;
+    }
+    const text = chat.trim();
+    setChatStatus("sending");
+    socket.timeout(5000).emit(
+      "game:chat",
+      { gameId: game.id, playerId: session.id, text },
+      (timeoutError: Error | null, result?: { ok: boolean; error?: string }) => {
+        if (timeoutError) {
+          setError("El servidor no respondió al mensaje. Probá nuevamente.");
+          setChatStatus(socket.connected ? "connected" : "disconnected");
+        } else if (result?.ok) {
+          setChat("");
+          setChatStatus("connected");
+        } else {
+          setError(result?.error || "No se pudo enviar el mensaje.");
+          setChatStatus("connected");
+        }
+      }
+    );
   };
 
   if (game.status === "lobby") {
@@ -346,10 +379,23 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
               {["setup-5", "setup-3", "reinforce"].includes(game.phase) && (
                 <>
                   <div className="army-count"><strong>{game.reinforcements}</strong><span>ejércitos por ubicar</span></div>
+                  {game.phase === "reinforce" && (
+                    <div className="reinforcement-breakdown">
+                      <div><strong>{game.baseReinforcements}</strong><span>Libres · cualquier territorio propio</span></div>
+                      {Object.entries(game.continentReinforcements)
+                        .filter(([, count]) => (count ?? 0) > 0)
+                        .map(([continentId, count]) => (
+                          <div key={continentId}>
+                            <strong>{count}</strong>
+                            <span>{CONTINENTS[continentId as keyof typeof CONTINENTS].name} · solo dentro del continente</span>
+                          </div>
+                        ))}
+                    </div>
+                  )}
                   <p>Tocá un territorio propio para colocar una ficha.</p>
                   {selectedState?.ownerId === active.id && (
-                    <button className="button" onClick={() => dispatch({ type: "place", countryId: selected!, count: game.reinforcements })}>
-                      Colocar todos en {selectedName}
+                    <button className="button" disabled={selectedPlacementAvailable < 1} onClick={() => dispatch({ type: "place", countryId: selected!, count: selectedPlacementAvailable })}>
+                      Colocar {selectedPlacementAvailable} en {selectedName}
                     </button>
                   )}
                 </>
@@ -412,6 +458,9 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
 
           {tab === "chat" && (
             <div className="command-content chat-panel">
+              <div className={`chat-status chat-status--${chatStatus}`}>
+                <i /> {chatStatus === "connected" ? "Chat conectado" : chatStatus === "sending" ? "Enviando…" : chatStatus === "connecting" ? "Conectando…" : "Chat desconectado"}
+              </div>
               <div className="chat-messages">
                 {game.messages.slice(-60).map((message) => (
                   <div className={message.system ? "chat-message chat-message--system" : "chat-message"} key={message.id}>
@@ -422,9 +471,11 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
               {!local && me && (
                 <form className="chat-form" onSubmit={(event) => { event.preventDefault(); sendChat(); }}>
                   <input value={chat} onChange={(event) => setChat(event.target.value)} placeholder="Escribí al consejo…" maxLength={400} />
-                  <button>Enviar</button>
+                  <button disabled={chatStatus !== "connected" || !chat.trim()}>Enviar</button>
                 </form>
               )}
+              {!local && !me && <p className="chat-readonly">Estás observando la partida. Los espectadores pueden leer, pero no escribir.</p>}
+              {local && <p className="chat-readonly">El chat está disponible únicamente en partidas online.</p>}
             </div>
           )}
 

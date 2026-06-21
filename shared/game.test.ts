@@ -60,6 +60,39 @@ describe("motor de Reinos en Guerra", () => {
     assert.ok(game.reinforcements > 0);
   });
 
+  it("obliga a ubicar el bonus continental dentro del continente conquistado", () => {
+    const game = startedGame();
+    const player = game.players[0];
+    const rival = game.players[1];
+
+    game.activePlayerIndex = 0;
+    game.phase = "reinforce";
+    game.countries.forEach((country) => {
+      country.ownerId = rival.id;
+      country.armies = 1;
+    });
+    for (const countryId of [0, 1, 2, 3, 4, 5, 26]) {
+      game.countries[countryId].ownerId = player.id;
+    }
+    game.reinforcements = 5;
+    game.baseReinforcements = 2;
+    game.continentReinforcements = { "america-sur": 3 };
+
+    assert.throws(
+      () => applyAction(game, player.id, { type: "place", countryId: 26, count: 5 }),
+      /dentro de su continente/
+    );
+
+    applyAction(game, player.id, { type: "place", countryId: 0, count: 3 });
+    assert.equal(game.continentReinforcements["america-sur"], 0);
+    assert.equal(game.baseReinforcements, 2);
+    assert.equal(game.reinforcements, 2);
+
+    applyAction(game, player.id, { type: "place", countryId: 26, count: 2 });
+    assert.equal(game.phase, "attack");
+    assert.equal(game.baseReinforcements, 0);
+  });
+
   it("resuelve dados ordenados y conquista al eliminar la última defensa", () => {
     const game = startedGame();
     game.phase = "attack";
