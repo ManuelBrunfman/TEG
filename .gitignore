@@ -1,0 +1,8 @@
+node_modules/
+dist/
+dist-server/
+dist-test/
+data/
+.env
+.research-teg/
+*.log
