@@ -7,6 +7,11 @@ import { GameView } from "./components/GameView";
 
 const avatars = ["⚔️", "🛡️", "🏰", "🐉", "🦅", "🦁"];
 
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+}
+
 function savedSession(): Session | null {
   try {
     return JSON.parse(localStorage.getItem("reinos-session") || "null");
@@ -28,6 +33,40 @@ export default function App() {
   const [game, setGame] = useState<GameState | null>(null);
   const [localMode, setLocalMode] = useState(false);
   const [page, setPage] = useState<"home" | "create" | "local" | "admin" | "legal">("home");
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [installed, setInstalled] = useState(() =>
+    window.matchMedia("(display-mode: standalone)").matches ||
+    Boolean((window.navigator as Navigator & { standalone?: boolean }).standalone)
+  );
+
+  useEffect(() => {
+    const captureInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    };
+    const markInstalled = () => {
+      setInstalled(true);
+      setInstallPrompt(null);
+    };
+    window.addEventListener("beforeinstallprompt", captureInstallPrompt);
+    window.addEventListener("appinstalled", markInstalled);
+    return () => {
+      window.removeEventListener("beforeinstallprompt", captureInstallPrompt);
+      window.removeEventListener("appinstalled", markInstalled);
+    };
+  }, []);
+
+  const installApp = async () => {
+    if (!installPrompt) return false;
+    await installPrompt.prompt();
+    const choice = await installPrompt.userChoice;
+    if (choice.outcome === "accepted") {
+      setInstalled(true);
+      setInstallPrompt(null);
+      return true;
+    }
+    return false;
+  };
 
   const exitGame = (finished = false) => {
     if (finished) localStorage.removeItem("reinos-local-game");
@@ -41,7 +80,7 @@ export default function App() {
     }
   };
 
-  if (!session) return <Welcome onReady={(next) => {
+  if (!session) return <Welcome installed={installed} canInstall={Boolean(installPrompt)} onInstall={installApp} onReady={(next) => {
     localStorage.setItem("reinos-session", JSON.stringify(next));
     setSession(next);
   }} />;
@@ -67,13 +106,26 @@ export default function App() {
       }
     }}
     onNavigate={setPage}
+    installed={installed}
+    canInstall={Boolean(installPrompt)}
+    onInstall={installApp}
     onLogout={() => {
     localStorage.removeItem("reinos-session");
     setSession(null);
   }} />;
 }
 
-function Welcome({ onReady }: { onReady: (session: Session) => void }) {
+function Welcome({
+  onReady,
+  installed,
+  canInstall,
+  onInstall
+}: {
+  onReady: (session: Session) => void;
+  installed: boolean;
+  canInstall: boolean;
+  onInstall: () => Promise<boolean>;
+}) {
   const [name, setName] = useState("");
   const [avatar, setAvatar] = useState(avatars[0]);
   const [error, setError] = useState("");
@@ -102,6 +154,7 @@ function Welcome({ onReady }: { onReady: (session: Session) => void }) {
           {avatars.map((item) => <button key={item} className={item === avatar ? "active" : ""} onClick={() => setAvatar(item)}>{item}</button>)}
         </div>
         <button className="button button--large" onClick={enter} disabled={name.trim().length < 2}>Entrar como invitado</button>
+        {!installed && <InstallAppButton canInstall={canInstall} onInstall={onInstall} />}
         <div className="social-row">
           <button disabled title="Se activa al configurar credenciales">G Google</button>
           <button disabled title="Se activa al configurar credenciales">f Facebook</button>
@@ -118,12 +171,18 @@ function Home({
   onGame,
   onResumeLocal,
   onNavigate,
+  installed,
+  canInstall,
+  onInstall,
   onLogout
 }: {
   session: Session;
   onGame: (game: GameState) => void;
   onResumeLocal: () => void;
   onNavigate: (page: "create" | "local" | "admin" | "legal") => void;
+  installed: boolean;
+  canInstall: boolean;
+  onInstall: () => Promise<boolean>;
   onLogout: () => void;
 }) {
   const [games, setGames] = useState<PublicGameSummary[]>([]);
@@ -144,7 +203,10 @@ function Home({
     <main className="hall-screen">
       <header className="hall-header">
         <div className="brand-lockup"><Coat small /><span><strong>TEG Online</strong><small>Táctica y Estrategia de Guerra</small></span></div>
-        <button className="profile-button" onClick={onLogout}><span>{session.avatar}</span>{session.name} · Salir</button>
+        <div className="hall-header-actions">
+          {!installed && <InstallAppButton canInstall={canInstall} onInstall={onInstall} compact />}
+          <button className="profile-button" onClick={onLogout}><span>{session.avatar}</span>{session.name} · Salir</button>
+        </div>
       </header>
       <section className="hero-banner">
         <div>
@@ -253,6 +315,60 @@ function Home({
       </section>
       <footer className="hall-footer"><span><button onClick={() => onNavigate("admin")}>Administración</button><button onClick={() => onNavigate("legal")}>Privacidad y términos</button></span><span>Argentina · Español</span></footer>
     </main>
+  );
+}
+
+function InstallAppButton({
+  canInstall,
+  onInstall,
+  compact = false
+}: {
+  canInstall: boolean;
+  onInstall: () => Promise<boolean>;
+  compact?: boolean;
+}) {
+  const [showHelp, setShowHelp] = useState(false);
+  const isIos = /iphone|ipad|ipod/i.test(navigator.userAgent);
+
+  return (
+    <>
+      <button
+        className={compact ? "install-button install-button--compact" : "install-button"}
+        onClick={async () => {
+          if (canInstall && await onInstall()) return;
+          setShowHelp(true);
+        }}
+      >
+        <span>⬇</span>
+        <strong>Instalar app</strong>
+        {!compact && <small>Agregar TEG Online al teléfono</small>}
+      </button>
+      {showHelp && (
+        <div className="install-overlay" role="dialog" aria-modal="true" aria-labelledby="install-title">
+          <section className="panel install-dialog">
+            <button className="install-dialog-close" onClick={() => setShowHelp(false)} aria-label="Cerrar">×</button>
+            <span className="install-app-icon">⬇</span>
+            <p className="eyebrow">Aplicación web</p>
+            <h2 id="install-title">Instalar TEG Online</h2>
+            {isIos ? (
+              <ol>
+                <li>Abrí este enlace con <strong>Safari</strong>.</li>
+                <li>Tocá <strong>Compartir</strong> ⬆.</li>
+                <li>Elegí <strong>Agregar a pantalla de inicio</strong>.</li>
+              </ol>
+            ) : (
+              <ol>
+                <li>Abrí este enlace con <strong>Chrome</strong>.</li>
+                <li>Tocá el menú <strong>⋮</strong>.</li>
+                <li>Elegí <strong>Instalar aplicación</strong> o <strong>Agregar a pantalla principal</strong>.</li>
+              </ol>
+            )}
+            <p className="install-note">No se descarga un APK: se instala directamente desde el navegador.</p>
+            <button className="button button--large" onClick={() => setShowHelp(false)}>Entendido</button>
+          </section>
+        </div>
+      )}
+    </>
   );
 }
 
