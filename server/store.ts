@@ -25,6 +25,7 @@ class GameStore {
       game.regroupLocked ??= {};
       game.baseReinforcements ??= game.reinforcements;
       game.continentReinforcements ??= {};
+      game.placementHistory ??= [];
       game.roundStarterIndex ??= game.activePlayerIndex;
       game.roundStage ??= game.phase === "reinforce" ? "reinforce" : "combat";
       game.pendingConquest ??= null;

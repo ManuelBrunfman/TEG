@@ -58,6 +58,12 @@ export interface PendingConquest {
   moved: number;
 }
 
+export interface PlacementRecord {
+  countryId: number;
+  count: number;
+  source: "base" | ContinentId;
+}
+
 export interface Pact {
   id: string;
   kind: "border" | "global" | "international-zone";
@@ -102,6 +108,7 @@ export interface GameState {
   reinforcements: number;
   baseReinforcements: number;
   continentReinforcements: Partial<Record<ContinentId, number>>;
+  placementHistory: PlacementRecord[];
   turnDeadline: number | null;
   round: number;
   deck: CountryCard[];
@@ -132,7 +139,9 @@ export interface PublicGameSummary {
 }
 
 export type GameAction =
-  | { type: "place"; countryId: number; count: number }
+  | { type: "place"; countryId: number; count: number; source?: "base" | ContinentId }
+  | { type: "undo-place" }
+  | { type: "confirm-placement" }
   | { type: "attack"; from: number; to: number; dice?: number }
   | { type: "occupy"; count: number }
   | { type: "end-attack" }

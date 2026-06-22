@@ -63,6 +63,7 @@ export function createGame(params: {
     reinforcements: 0,
     baseReinforcements: 0,
     continentReinforcements: {},
+    placementHistory: [],
     turnDeadline: null,
     round: 0,
     deck: [],
@@ -168,6 +169,7 @@ export function startGame(state: GameState): GameState {
   state.reinforcements = 5;
   state.baseReinforcements = 5;
   state.continentReinforcements = {};
+  state.placementHistory = [];
   state.pendingConquest = null;
   state.turnDeadline = Date.now() + state.settings.turnSeconds * 1000;
   state.messages.push(systemMessage("La campaña comenzó. Cada reino dispone sus primeros 5 ejércitos."));
@@ -195,6 +197,7 @@ function beginReinforcements(state: GameState, playerId: string) {
   state.reinforcements =
     state.baseReinforcements +
     Object.values(state.continentReinforcements).reduce((total, value) => total + (value ?? 0), 0);
+  state.placementHistory = [];
 }
 
 function resetDeadline(state: GameState) {
@@ -215,6 +218,7 @@ function finishPlacement(state: GameState) {
     const nextIndex = nextLivingIndex(state, state.activePlayerIndex);
     state.baseReinforcements = 0;
     state.continentReinforcements = {};
+    state.placementHistory = [];
     if (nextIndex === state.roundStarterIndex) {
       state.activePlayerIndex = state.roundStarterIndex;
       state.roundStage = "combat";
@@ -235,6 +239,7 @@ function finishPlacement(state: GameState) {
     state.reinforcements = 3;
     state.baseReinforcements = 3;
     state.continentReinforcements = {};
+    state.placementHistory = [];
     state.messages.push(systemMessage("Comienza la segunda disposición: 3 ejércitos por reino."));
   } else if (wasLast && state.phase === "setup-3") {
     state.phase = "attack";
@@ -246,16 +251,18 @@ function finishPlacement(state: GameState) {
     state.reinforcements = 0;
     state.baseReinforcements = 0;
     state.continentReinforcements = {};
+    state.placementHistory = [];
     state.messages.push(systemMessage("La guerra comienza. En la primera ronda se ataca sin recibir nuevos refuerzos."));
   } else {
     state.reinforcements = state.phase === "setup-5" ? 5 : 3;
     state.baseReinforcements = state.reinforcements;
     state.continentReinforcements = {};
+    state.placementHistory = [];
   }
   resetDeadline(state);
 }
 
-function place(state: GameState, countryId: number, count: number) {
+function place(state: GameState, countryId: number, count: number, requestedSource?: "base" | ContinentId) {
   if (!["setup-5", "setup-3", "reinforce"].includes(state.phase)) {
     throw new Error("No es el momento de colocar ejércitos.");
   }
@@ -268,19 +275,44 @@ function place(state: GameState, countryId: number, count: number) {
   }
   const continentId = COUNTRIES[countryId].continent;
   const continentAvailable = state.continentReinforcements[continentId] ?? 0;
-  const availableForCountry = state.baseReinforcements + continentAvailable;
-  if (count > availableForCountry) {
-    const restricted = Object.values(state.continentReinforcements).reduce((total, value) => total + (value ?? 0), 0);
-    if (restricted > 0) throw new Error("Los refuerzos continentales restantes deben colocarse dentro de su continente.");
-    throw new Error("No hay suficientes ejércitos disponibles.");
+  const source = requestedSource ?? (state.baseReinforcements > 0 ? "base" : continentId);
+  if (source === "base") {
+    if (count > state.baseReinforcements) throw new Error("No hay suficientes ejércitos libres disponibles.");
+    state.baseReinforcements -= count;
+  } else {
+    if (source !== continentId) throw new Error("Ese bonus solo puede colocarse dentro de su continente.");
+    if (count > continentAvailable) throw new Error("No hay suficientes ejércitos de ese continente.");
+    state.continentReinforcements[continentId] = continentAvailable - count;
   }
   country.armies += count;
-  const fromContinent = Math.min(count, continentAvailable);
-  if (fromContinent > 0) {
-    state.continentReinforcements[continentId] = continentAvailable - fromContinent;
-  }
-  state.baseReinforcements -= count - fromContinent;
   state.reinforcements -= count;
+  state.placementHistory.push({ countryId, count, source });
+  resetDeadline(state);
+}
+
+function undoPlacement(state: GameState) {
+  if (!["setup-5", "setup-3", "reinforce"].includes(state.phase)) {
+    throw new Error("No hay una colocación para deshacer.");
+  }
+  const last = state.placementHistory.pop();
+  if (!last) throw new Error("Todavía no colocaste ejércitos en este turno.");
+  const country = state.countries[last.countryId];
+  if (!country || country.ownerId !== activePlayer(state).id || country.armies - last.count < 1) {
+    state.placementHistory.push(last);
+    throw new Error("Esa colocación ya no se puede deshacer.");
+  }
+  country.armies -= last.count;
+  state.reinforcements += last.count;
+  if (last.source === "base") state.baseReinforcements += last.count;
+  else state.continentReinforcements[last.source] = (state.continentReinforcements[last.source] ?? 0) + last.count;
+  resetDeadline(state);
+}
+
+function confirmPlacement(state: GameState) {
+  if (!["setup-5", "setup-3", "reinforce"].includes(state.phase)) {
+    throw new Error("No es el momento de confirmar refuerzos.");
+  }
+  if (state.reinforcements > 0) throw new Error("Primero debés ubicar todos los ejércitos.");
   finishPlacement(state);
 }
 
@@ -573,7 +605,13 @@ export function applyAction(state: GameState, actorId: string, action: GameActio
   }
   switch (action.type) {
     case "place":
-      place(state, action.countryId, action.count);
+      place(state, action.countryId, action.count, action.source);
+      break;
+    case "undo-place":
+      undoPlacement(state);
+      break;
+    case "confirm-placement":
+      confirmPlacement(state);
       break;
     case "attack":
       attack(state, action.from, action.to, action.dice);
@@ -625,9 +663,10 @@ export function handleTimeout(state: GameState): GameState {
         ? options.filter((country) => COUNTRIES[country.id].continent === requiredContinent)
         : options;
       const country = choices[Math.floor(Math.random() * choices.length)];
-      place(state, country.id, 1);
+      place(state, country.id, 1, requiredContinent ?? "base");
       if (activePlayer(state).id !== player.id) break;
     }
+    if (activePlayer(state).id === player.id && state.reinforcements === 0) confirmPlacement(state);
   } else if (state.phase === "occupy") {
     occupy(state, state.pendingConquest?.minimum ?? 1);
   } else if (state.phase === "attack") {
@@ -647,6 +686,9 @@ export function runBotStep(state: GameState): GameState {
   if (!player.isBot && player.connected) return state;
 
   if (["setup-5", "setup-3", "reinforce"].includes(state.phase)) {
+    if (state.reinforcements === 0) {
+      return applyAction(state, player.id, { type: "confirm-placement" });
+    }
     if (player.isBot && state.phase === "reinforce") {
       const exchangeCards = findValidExchangeCards(player.cards);
       if (exchangeCards) {
@@ -664,7 +706,12 @@ export function runBotStep(state: GameState): GameState {
       : owned;
     if (!player.isBot) {
       const randomCountry = eligible[Math.floor(Math.random() * eligible.length)];
-      return applyAction(state, player.id, { type: "place", countryId: randomCountry.id, count: 1 });
+      return applyAction(state, player.id, {
+        type: "place",
+        countryId: randomCountry.id,
+        count: 1,
+        source: requiredContinent ?? "base"
+      });
     }
     const border = eligible.filter((country) =>
       (ADJACENCY[country.id] ?? []).some((neighbor) => state.countries[neighbor].ownerId !== player.id)
@@ -673,7 +720,12 @@ export function runBotStep(state: GameState): GameState {
     const weakest = [...choices].sort((a, b) => a.armies - b.armies)[0];
     const continentAvailable = state.continentReinforcements[COUNTRIES[weakest.id].continent] ?? 0;
     const count = requiredContinent ? continentAvailable : state.baseReinforcements;
-    return applyAction(state, player.id, { type: "place", countryId: weakest.id, count: Math.max(1, count) });
+    return applyAction(state, player.id, {
+      type: "place",
+      countryId: weakest.id,
+      count: Math.max(1, count),
+      source: requiredContinent ?? "base"
+    });
   }
   if (state.phase === "occupy") {
     return applyAction(state, player.id, {

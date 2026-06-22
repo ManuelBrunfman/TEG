@@ -3,7 +3,7 @@ import { io, type Socket } from "socket.io-client";
 import { ADJACENCY, CONTINENTS, COUNTRIES, areAdjacent } from "@shared/map";
 import { missionText } from "@shared/missions";
 import { applyAction, findValidExchangeCards, handleTimeout, runBotStep, validExchange } from "@shared/game";
-import type { GameAction, GameState, Session } from "@shared/types";
+import type { BattleResult, ContinentId, GameAction, GameState, Session } from "@shared/types";
 import { api, type FriendsState } from "../api";
 import { MapBoard } from "./MapBoard";
 
@@ -34,6 +34,74 @@ const phaseDetails: Record<GameState["phase"], { icon: string; kind: string; ste
   finished: { icon: "♛", kind: "finished", step: 3, instruction: "La campaña ha finalizado." }
 };
 
+const diceFaces = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"];
+
+interface MusicController {
+  context: AudioContext;
+  intervalId: number;
+  drones: OscillatorNode[];
+}
+
+function startMedievalMusic(): MusicController {
+  const context = new window.AudioContext();
+  const master = context.createGain();
+  master.gain.value = 0.075;
+  master.connect(context.destination);
+
+  const drones = [73.42, 110].map((frequency, index) => {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = index === 0 ? "triangle" : "sine";
+    oscillator.frequency.value = frequency;
+    gain.gain.value = index === 0 ? 0.22 : 0.12;
+    oscillator.connect(gain).connect(master);
+    oscillator.start();
+    return oscillator;
+  });
+
+  const melody = [146.83, 174.61, 196, 220, 261.63, 293.66, 220, 196];
+  let noteIndex = 0;
+  const playPhrase = () => {
+    const now = context.currentTime;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "triangle";
+    oscillator.frequency.value = melody[noteIndex % melody.length];
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.35, now + 0.035);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.72);
+    oscillator.connect(gain).connect(master);
+    oscillator.start(now);
+    oscillator.stop(now + 0.75);
+    if (noteIndex % 4 === 0) {
+      const drum = context.createOscillator();
+      const drumGain = context.createGain();
+      drum.type = "sine";
+      drum.frequency.setValueAtTime(92, now);
+      drum.frequency.exponentialRampToValueAtTime(46, now + 0.2);
+      drumGain.gain.setValueAtTime(0.42, now);
+      drumGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+      drum.connect(drumGain).connect(master);
+      drum.start(now);
+      drum.stop(now + 0.3);
+    }
+    noteIndex += 1;
+  };
+  playPhrase();
+  const intervalId = window.setInterval(playPhrase, 850);
+  void context.resume();
+  return { context, intervalId, drones };
+}
+
+function stopMedievalMusic(controller: MusicController | null) {
+  if (!controller) return;
+  window.clearInterval(controller.intervalId);
+  controller.drones.forEach((oscillator) => {
+    try { oscillator.stop(); } catch { /* already stopped */ }
+  });
+  void controller.context.close();
+}
+
 export function GameView({ initialGame, session, local, onExit }: Props) {
   const [game, setGame] = useState<GameState>(() => ({
     ...initialGame,
@@ -49,6 +117,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
     pendingConquest: initialGame.pendingConquest ?? null,
     baseReinforcements: initialGame.baseReinforcements ?? initialGame.reinforcements,
     continentReinforcements: initialGame.continentReinforcements ?? {},
+    placementHistory: initialGame.placementHistory ?? [],
     paused: initialGame.paused ?? false,
     pauseVotes: initialGame.pauseVotes ?? [],
     pausedRemainingMs: initialGame.pausedRemainingMs ?? null,
@@ -63,13 +132,18 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   const [regroupCount, setRegroupCount] = useState(1);
   const [chatStatus, setChatStatus] = useState<"connecting" | "connected" | "disconnected" | "sending">("connecting");
   const [colorBlind, setColorBlind] = useState(false);
-  const [soundOn, setSoundOn] = useState(true);
+  const [showCountryNames, setShowCountryNames] = useState(false);
+  const [soundOn, setSoundOn] = useState(() => localStorage.getItem("teg-sound") !== "off");
+  const [musicOn, setMusicOn] = useState(false);
+  const [reinforcementSource, setReinforcementSource] = useState<"base" | ContinentId>("base");
+  const [battlePresentation, setBattlePresentation] = useState<{ battle: BattleResult; rolling: boolean } | null>(null);
   const [pactCountryId, setPactCountryId] = useState<number | "">("");
   const [lobbyFriends, setLobbyFriends] = useState<FriendsState>({ accepted: [], incoming: [], outgoing: [] });
   const [invitedFriends, setInvitedFriends] = useState<string[]>([]);
   const [localRevealed, setLocalRevealed] = useState(!local);
   const [now, setNow] = useState(Date.now());
   const socketRef = useRef<Socket | null>(null);
+  const musicRef = useRef<MusicController | null>(null);
   const active = game.players[game.activePlayerIndex];
   const me = local ? active : game.players.find((player) => player.id === session.id);
   const isMyTurn = local ? true : active?.id === session.id;
@@ -114,7 +188,10 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
     });
     socket.on("disconnect", () => setChatStatus("disconnected"));
     socket.on("game:state", (next: GameState) => {
-      setGame(next);
+      setGame({
+        ...next,
+        placementHistory: next.placementHistory ?? []
+      });
       setSelected(null);
       setRegroupDraft(null);
       setSelectedCardIds((current) =>
@@ -140,24 +217,58 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   }, [game, local]);
 
   useEffect(() => {
-    if (!game.lastBattle) return;
+    if (!game.lastBattle) {
+      setBattlePresentation(null);
+      return;
+    }
+    setBattlePresentation({ battle: game.lastBattle, rolling: true });
+    const settleTimer = window.setTimeout(() => {
+      setBattlePresentation((current) => current ? { ...current, rolling: false } : null);
+    }, 650);
+    const hideTimer = window.setTimeout(() => setBattlePresentation(null), 2300);
     if (soundOn) {
       const AudioContextClass = window.AudioContext;
       const context = new AudioContextClass();
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      oscillator.type = "triangle";
-      oscillator.frequency.setValueAtTime(game.lastBattle.conquered ? 180 : 120, context.currentTime);
-      oscillator.frequency.exponentialRampToValueAtTime(game.lastBattle.conquered ? 520 : 220, context.currentTime + 0.18);
-      gain.gain.setValueAtTime(0.07, context.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.22);
-      oscillator.connect(gain).connect(context.destination);
-      oscillator.start();
-      oscillator.stop(context.currentTime + 0.23);
-      oscillator.addEventListener("ended", () => void context.close());
+      const master = context.createGain();
+      master.gain.value = 0.23;
+      master.connect(context.destination);
+      [0, 0.08, 0.16].forEach((delay, index) => {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const startsAt = context.currentTime + delay;
+        oscillator.type = index === 1 ? "square" : "triangle";
+        oscillator.frequency.setValueAtTime(game.lastBattle!.conquered ? 170 + index * 45 : 115 + index * 28, startsAt);
+        oscillator.frequency.exponentialRampToValueAtTime(game.lastBattle!.conquered ? 520 : 190, startsAt + 0.2);
+        gain.gain.setValueAtTime(index === 1 ? 0.12 : 0.24, startsAt);
+        gain.gain.exponentialRampToValueAtTime(0.001, startsAt + 0.24);
+        oscillator.connect(gain).connect(master);
+        oscillator.start(startsAt);
+        oscillator.stop(startsAt + 0.25);
+      });
+      window.setTimeout(() => void context.close(), 650);
+      void context.resume();
     }
     navigator.vibrate?.(game.lastBattle.conquered ? [45, 40, 80] : 45);
-  }, [game.lastBattle, soundOn]);
+    return () => {
+      window.clearTimeout(settleTimer);
+      window.clearTimeout(hideTimer);
+    };
+  }, [game.lastBattle]);
+
+  useEffect(() => {
+    localStorage.setItem("teg-sound", soundOn ? "on" : "off");
+  }, [soundOn]);
+
+  useEffect(() => () => stopMedievalMusic(musicRef.current), []);
+
+  useEffect(() => {
+    if (!["setup-5", "setup-3", "reinforce"].includes(game.phase)) return;
+    if (reinforcementSource === "base" && game.baseReinforcements > 0) return;
+    if (reinforcementSource !== "base" && (game.continentReinforcements[reinforcementSource] ?? 0) > 0) return;
+    const continent = Object.entries(game.continentReinforcements)
+      .find(([, count]) => (count ?? 0) > 0)?.[0] as ContinentId | undefined;
+    setReinforcementSource(game.baseReinforcements > 0 ? "base" : continent ?? "base");
+  }, [game.activePlayerIndex, game.baseReinforcements, game.continentReinforcements, game.phase, reinforcementSource]);
 
   const dispatch = (action: GameAction) => {
     setError("");
@@ -188,8 +299,15 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
     if (game.phase === "occupy") return;
     const country = game.countries[countryId];
     if (["setup-5", "setup-3", "reinforce"].includes(game.phase)) {
-      if (country.ownerId === active.id) dispatch({ type: "place", countryId, count: 1 });
-      else setError("Solo podés reforzar territorios propios.");
+      if (country.ownerId !== active.id) {
+        setError("Solo podés reforzar territorios propios.");
+        return;
+      }
+      if (reinforcementSource !== "base" && COUNTRIES[countryId].continent !== reinforcementSource) {
+        setError(`El bonus de ${CONTINENTS[reinforcementSource].name} solo puede ubicarse dentro de ese continente.`);
+        return;
+      }
+      dispatch({ type: "place", countryId, count: 1, source: reinforcementSource });
       return;
     }
     if (selected === null) {
@@ -223,26 +341,39 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   };
 
   const seconds = Math.max(0, Math.ceil(((game.turnDeadline ?? now) - now) / 1000));
-  const selectedState = selected === null ? null : game.countries[selected];
   const myCards = me?.cards ?? [];
   const validCardSet = findValidExchangeCards(myCards);
   const selectedCards = myCards.filter((card) => selectedCardIds.includes(card.countryId));
   const selectedExchangeValid = validExchange(selectedCards);
   const nextExchangeValue = !me ? 4 : me.exchanges === 0 ? 4 : me.exchanges === 1 ? 7 : me.exchanges === 2 ? 10 : 10 + (me.exchanges - 2) * 5;
   const selectedName = selected === null ? "" : COUNTRIES[selected].name;
-  const selectedContinent = selected === null ? null : COUNTRIES[selected].continent;
-  const selectedPlacementAvailable = selectedContinent === null
-    ? 0
-    : game.baseReinforcements + (game.continentReinforcements[selectedContinent] ?? 0);
   const winner = game.players.find((player) => player.id === game.winnerId);
   const canStart = game.status === "lobby" && game.hostId === session.id;
   const phase = phaseDetails[game.phase];
   const phaseInstruction = isMyTurn ? phase.instruction : `Esperando a ${active?.name ?? "otro comandante"}.`;
-  const battleText = useMemo(() => {
-    if (!game.lastBattle) return null;
-    const battle = game.lastBattle;
-    return `${COUNTRIES[battle.from].name} ${battle.attackerDice.join("·")} vs ${COUNTRIES[battle.to].name} ${battle.defenderDice.join("·")}`;
-  }, [game.lastBattle]);
+  const orderedPlayers = useMemo(() => {
+    const order = game.players.map((player, index) => ({ player, index }));
+    return [
+      ...order.slice(game.roundStarterIndex),
+      ...order.slice(0, game.roundStarterIndex)
+    ].filter(({ player }) => !player.eliminated);
+  }, [game.players, game.roundStarterIndex]);
+  const currentOrderPosition = orderedPlayers.findIndex(({ index }) => index === game.activePlayerIndex);
+
+  const toggleMusic = () => {
+    if (musicOn) {
+      stopMedievalMusic(musicRef.current);
+      musicRef.current = null;
+      setMusicOn(false);
+      return;
+    }
+    try {
+      musicRef.current = startMedievalMusic();
+      setMusicOn(true);
+    } catch {
+      setError("El navegador no pudo iniciar la música. Tocá nuevamente después de interactuar con la pantalla.");
+    }
+  };
 
   const sendChat = () => {
     if (!chat.trim() || local) return;
@@ -352,7 +483,9 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
         <button className="icon-button" onClick={() => onExit(game.status === "finished")} aria-label="Salir">☰</button>
         <div>
           <strong>{game.name}</strong>
-          <small>Ronda {game.round || "inicial"}</small>
+          <small>
+            Ronda {game.round || "inicial"} · turno {Math.max(1, currentOrderPosition + 1)} de {orderedPlayers.length}
+          </small>
         </div>
         <div className={`turn-clock ${seconds <= 15 ? "turn-clock--danger" : ""}`}>
           <span>⌛</span><strong>{seconds}s</strong>
@@ -360,10 +493,18 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
       </header>
 
       <section className="player-ribbon">
-        {game.players.map((player, index) => (
-          <div className={`player-chip ${index === game.activePlayerIndex ? "player-chip--active" : ""} ${player.eliminated ? "player-chip--out" : ""}`} key={player.id}>
+        <div className="turn-order-label">
+          <small>Orden</small>
+          <strong>{Math.max(1, currentOrderPosition + 1)}/{orderedPlayers.length}</strong>
+        </div>
+        {orderedPlayers.map(({ player, index }, orderIndex) => (
+          <div className={`player-chip ${index === game.activePlayerIndex ? "player-chip--active" : ""}`} key={player.id}>
+            <b className="player-order-number">{orderIndex + 1}º</b>
             <span className={`player-dot color-${player.color}`}>{player.avatar}</span>
-            <span><strong>{player.name}</strong><small>{game.countries.filter((c) => c.ownerId === player.id).length} territorios</small></span>
+            <span>
+              <strong>{player.name}</strong>
+              <small>{index === game.activePlayerIndex ? "JUGANDO AHORA" : orderIndex < currentOrderPosition ? "Ya jugó" : "Próximo"} · {game.countries.filter((c) => c.ownerId === player.id).length} territorios</small>
+            </span>
             {!player.connected && !player.isBot && <em>auto</em>}
           </div>
         ))}
@@ -371,7 +512,20 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
 
       <div className="board-layout">
         <section className="board-wrap">
-          <MapBoard game={game} selected={selected} onSelect={selectCountry} colorBlind={colorBlind} />
+          <MapBoard
+            game={game}
+            selected={selected}
+            onSelect={selectCountry}
+            colorBlind={colorBlind}
+            showCountryNames={showCountryNames}
+          />
+          <button
+            className={`country-name-toggle ${showCountryNames ? "active" : ""}`}
+            onClick={() => setShowCountryNames((current) => !current)}
+            aria-pressed={showCountryNames}
+          >
+            {showCountryNames ? "Ocultar países" : "Mostrar países"}
+          </button>
           <div className={`phase-banner phase-banner--${phase.kind}`}>
             <span className="phase-banner-icon">{phase.icon}</span>
             <div className="phase-banner-copy">
@@ -384,7 +538,35 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
               <span>{phase.step}/3</span>
             </div>
           </div>
-          {battleText && <div className="battle-toast">⚔ {battleText}</div>}
+          {battlePresentation && (
+            <div className={`battle-result ${battlePresentation.rolling ? "battle-result--rolling" : ""}`}>
+              <small>{battlePresentation.rolling ? "Los dados están rodando…" : "Resultado de la batalla"}</small>
+              <div className="battle-result-countries">
+                <strong>{COUNTRIES[battlePresentation.battle.from].name}</strong>
+                <span>contra</span>
+                <strong>{COUNTRIES[battlePresentation.battle.to].name}</strong>
+              </div>
+              <div className="dice-score">
+                <div>
+                  {battlePresentation.battle.attackerDice.map((die, index) => (
+                    <i style={{ animationDelay: `${index * 70}ms` }} key={`attacker-${index}`}>{diceFaces[die - 1]}</i>
+                  ))}
+                </div>
+                <b>⚔</b>
+                <div>
+                  {battlePresentation.battle.defenderDice.map((die, index) => (
+                    <i style={{ animationDelay: `${index * 70 + 40}ms` }} key={`defender-${index}`}>{diceFaces[die - 1]}</i>
+                  ))}
+                </div>
+              </div>
+              {!battlePresentation.rolling && (
+                <p>
+                  Atacante −{battlePresentation.battle.attackerLosses} · Defensor −{battlePresentation.battle.defenderLosses}
+                  {battlePresentation.battle.conquered ? " · Territorio conquistado" : ""}
+                </p>
+              )}
+            </div>
+          )}
           {error && <button className="error-banner error-banner--floating" onClick={() => setError("")}>{error} ×</button>}
           {game.status === "finished" && (
             <div className="victory-overlay">
@@ -415,24 +597,54 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                 <>
                   <div className="army-count"><strong>{game.reinforcements}</strong><span>ejércitos por ubicar</span></div>
                   {game.phase === "reinforce" && (
-                    <div className="reinforcement-breakdown">
-                      <div><strong>{game.baseReinforcements}</strong><span>Libres · cualquier territorio propio</span></div>
+                    <div className="reinforcement-pools">
+                      <button
+                        className={reinforcementSource === "base" ? "active" : ""}
+                        disabled={game.baseReinforcements < 1}
+                        onClick={() => setReinforcementSource("base")}
+                      >
+                        <strong>{game.baseReinforcements}</strong>
+                        <span>Libres<small>Cualquier territorio propio</small></span>
+                      </button>
                       {Object.entries(game.continentReinforcements)
                         .filter(([, count]) => (count ?? 0) > 0)
                         .map(([continentId, count]) => (
-                          <div key={continentId}>
+                          <button
+                            className={reinforcementSource === continentId ? "active" : ""}
+                            key={continentId}
+                            onClick={() => setReinforcementSource(continentId as ContinentId)}
+                          >
                             <strong>{count}</strong>
-                            <span>{CONTINENTS[continentId as keyof typeof CONTINENTS].name} · solo dentro del continente</span>
-                          </div>
+                            <span>
+                              {CONTINENTS[continentId as ContinentId].name}
+                              <small>Solo dentro del continente</small>
+                            </span>
+                          </button>
                         ))}
                     </div>
                   )}
-                  <p>Tocá un territorio propio para colocar una ficha.</p>
-                  {selectedState?.ownerId === active.id && (
-                    <button className="button" disabled={selectedPlacementAvailable < 1} onClick={() => dispatch({ type: "place", countryId: selected!, count: selectedPlacementAvailable })}>
-                      Colocar {selectedPlacementAvailable} en {selectedName}
+                  <p>
+                    Tocá un territorio propio para colocar una ficha
+                    {game.phase === "reinforce" && reinforcementSource !== "base"
+                      ? ` del bonus de ${CONTINENTS[reinforcementSource].name}.`
+                      : " libre."}
+                  </p>
+                  <div className="placement-actions">
+                    <button
+                      className="button button--secondary"
+                      disabled={!isMyTurn || game.placementHistory.length === 0}
+                      onClick={() => dispatch({ type: "undo-place" })}
+                    >
+                      ↶ Deshacer última ficha
                     </button>
-                  )}
+                    <button
+                      className="button"
+                      disabled={!isMyTurn || game.reinforcements > 0}
+                      onClick={() => dispatch({ type: "confirm-placement" })}
+                    >
+                      Confirmar colocación
+                    </button>
+                  </div>
                 </>
               )}
               {game.phase === "attack" && (
@@ -503,10 +715,14 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                 <input type="checkbox" checked={colorBlind} onChange={(event) => setColorBlind(event.target.checked)} />
                 <span>Identificar colores con letras</span>
               </label>
-              <label className="toggle-row">
-                <input type="checkbox" checked={soundOn} onChange={(event) => setSoundOn(event.target.checked)} />
-                <span>Sonidos de batalla</span>
-              </label>
+              <div className="audio-controls">
+                <button className={soundOn ? "active" : ""} onClick={() => setSoundOn((current) => !current)} aria-pressed={soundOn}>
+                  {soundOn ? "🔊" : "🔇"} Efectos
+                </button>
+                <button className={musicOn ? "active" : ""} onClick={toggleMusic} aria-pressed={musicOn}>
+                  {musicOn ? "♫" : "♩"} Música épica
+                </button>
+              </div>
               {game.settings.visibility !== "public" && me && (
                 <button className="button button--secondary" onClick={() => dispatch({ type: "vote-pause" })}>
                   Solicitar pausa ({game.pauseVotes?.length ?? 0}/{game.players.filter((player) => !player.isBot && !player.eliminated).length})

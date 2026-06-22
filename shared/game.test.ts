@@ -32,6 +32,7 @@ function finishInitialPlacement(game: ReturnType<typeof startedGame>) {
     const player = game.players[game.activePlayerIndex];
     const country = game.countries.find((item) => item.ownerId === player.id)!;
     applyAction(game, player.id, { type: "place", countryId: country.id, count: game.reinforcements });
+    applyAction(game, player.id, { type: "confirm-placement" });
   }
 }
 
@@ -92,11 +93,13 @@ describe("motor de Reinos en Guerra", () => {
     assert.equal(game.baseReinforcements, 3);
 
     applyAction(game, second.id, { type: "place", countryId: 1, count: 3 });
+    assert.equal(game.activePlayerIndex, 1);
+    applyAction(game, second.id, { type: "confirm-placement" });
     assert.equal(game.phase, "reinforce");
     assert.equal(game.activePlayerIndex, 0);
   });
 
-  it("obliga a ubicar el bonus continental dentro del continente conquistado", () => {
+  it("separa los ejércitos libres del bonus continental", () => {
     const game = startedGame();
     const player = game.players[0];
     const rival = game.players[1];
@@ -116,18 +119,36 @@ describe("motor de Reinos en Guerra", () => {
     game.continentReinforcements = { "america-sur": 3 };
 
     assert.throws(
-      () => applyAction(game, player.id, { type: "place", countryId: 26, count: 5 }),
-      /dentro de su continente/
+      () => applyAction(game, player.id, { type: "place", countryId: 26, count: 1, source: "america-sur" }),
+      /solo puede colocarse/
     );
 
-    applyAction(game, player.id, { type: "place", countryId: 0, count: 3 });
-    assert.equal(game.continentReinforcements["america-sur"], 0);
-    assert.equal(game.baseReinforcements, 2);
-    assert.equal(game.reinforcements, 2);
+    applyAction(game, player.id, { type: "place", countryId: 0, count: 2, source: "base" });
+    assert.equal(game.continentReinforcements["america-sur"], 3);
+    assert.equal(game.baseReinforcements, 0);
+    assert.equal(game.reinforcements, 3);
 
-    applyAction(game, player.id, { type: "place", countryId: 26, count: 2 });
+    applyAction(game, player.id, { type: "place", countryId: 0, count: 3, source: "america-sur" });
+    assert.equal(game.continentReinforcements["america-sur"], 0);
+    assert.equal(game.reinforcements, 0);
+    applyAction(game, player.id, { type: "confirm-placement" });
     assert.equal(game.phase, "attack");
     assert.equal(game.baseReinforcements, 0);
+  });
+
+  it("permite deshacer la última colocación antes de confirmarla", () => {
+    const game = startedGame();
+    const player = game.players[0];
+    const country = game.countries.find((item) => item.ownerId === player.id)!;
+    const originalArmies = country.armies;
+
+    applyAction(game, player.id, { type: "place", countryId: country.id, count: 2, source: "base" });
+    assert.equal(country.armies, originalArmies + 2);
+    assert.equal(game.reinforcements, 3);
+    applyAction(game, player.id, { type: "undo-place" });
+    assert.equal(country.armies, originalArmies);
+    assert.equal(game.reinforcements, 5);
+    assert.equal(game.baseReinforcements, 5);
   });
 
   it("resuelve dados y permite elegir de 1 a 3 ejércitos para ocupar", () => {

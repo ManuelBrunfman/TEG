@@ -8,6 +8,7 @@ interface Props {
   selected: number | null;
   onSelect: (countryId: number) => void;
   colorBlind: boolean;
+  showCountryNames: boolean;
 }
 
 const asset = (file: string) => `/map/teg/${file}`;
@@ -19,7 +20,7 @@ const armyRadius = (armies: number) => {
   return 11;
 };
 
-export function MapBoard({ game, selected, onSelect, colorBlind }: Props) {
+export function MapBoard({ game, selected, onSelect, colorBlind, showCountryNames }: Props) {
   const selectedNeighbors = new Set(selected === null ? [] : ADJACENCY[selected] ?? []);
   const viewportRef = useRef<HTMLDivElement>(null);
   const centerRef = useRef({ x: 0.5, y: 0.5 });
@@ -201,16 +202,21 @@ export function MapBoard({ game, selected, onSelect, colorBlind }: Props) {
               >
                 {state.armies}
               </text>
+              {showCountryNames && (
+                <text
+                  x={sprite.markerX}
+                  y={sprite.markerY - armyRadius(state.armies) - 5}
+                  textAnchor="middle"
+                  className="country-name"
+                >
+                  {COUNTRIES[sprite.id].name}
+                </text>
+              )}
             </g>
           );
         })}
       </svg>
         </div>
-      </div>
-      <div className="map-zoom-controls" aria-label="Controles de zoom">
-        <button onClick={() => setMapZoom(zoom - 0.5)} disabled={zoom <= 1} aria-label="Alejar mapa">−</button>
-        <button onClick={() => setMapZoom(1)} aria-label="Ver mapa completo">{Math.round(zoom * 100)}%</button>
-        <button onClick={() => setMapZoom(zoom + 0.5)} disabled={zoom >= 3} aria-label="Acercar mapa">+</button>
       </div>
     </div>
   );
