@@ -9,3 +9,4 @@ data/
 .tools/
 .tmp/
 .codex-remote-attachments/
+.vscode/

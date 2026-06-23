@@ -6,6 +6,13 @@ import { Coat } from "./components/Coat";
 import { GameView } from "./components/GameView";
 
 const avatars = ["⚔️", "🛡️", "🏰", "🐉", "🦅", "🦁"];
+const onlineGameStorageKey = "reinos-online-game";
+
+interface SavedOnlineGame {
+  id: string;
+  code: string;
+  name: string;
+}
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -23,6 +30,14 @@ function savedSession(): Session | null {
 function savedLocalGame(): GameState | null {
   try {
     return JSON.parse(localStorage.getItem("reinos-local-game") || "null");
+  } catch {
+    return null;
+  }
+}
+
+function savedOnlineGame(): SavedOnlineGame | null {
+  try {
+    return JSON.parse(localStorage.getItem(onlineGameStorageKey) || "null");
   } catch {
     return null;
   }
@@ -68,8 +83,20 @@ export default function App() {
     return false;
   };
 
+  const openOnlineGame = (next: GameState) => {
+    localStorage.setItem(onlineGameStorageKey, JSON.stringify({
+      id: next.id,
+      code: next.code,
+      name: next.name
+    } satisfies SavedOnlineGame));
+    setLocalMode(false);
+    setGame(next);
+  };
+
   const exitGame = (finished = false) => {
-    if (finished) localStorage.removeItem("reinos-local-game");
+    if (finished) {
+      localStorage.removeItem(localMode ? "reinos-local-game" : onlineGameStorageKey);
+    }
     setGame(null);
     setLocalMode(false);
     setPage("home");
@@ -87,7 +114,7 @@ export default function App() {
 
   if (game) return <GameView initialGame={game} session={session} local={localMode} onExit={exitGame} />;
 
-  if (page === "create") return <CreateOnline session={session} onBack={() => setPage("home")} onCreated={setGame} />;
+  if (page === "create") return <CreateOnline session={session} onBack={() => setPage("home")} onCreated={openOnlineGame} />;
   if (page === "local") return <CreateLocal session={session} onBack={() => setPage("home")} onCreated={(next) => {
     setLocalMode(true);
     setGame(next);
@@ -97,7 +124,7 @@ export default function App() {
 
   return <Home
     session={session}
-    onGame={setGame}
+    onGame={openOnlineGame}
     onResumeLocal={() => {
       const saved = savedLocalGame();
       if (saved) {
@@ -111,6 +138,7 @@ export default function App() {
     onInstall={installApp}
     onLogout={() => {
     localStorage.removeItem("reinos-session");
+    localStorage.removeItem(onlineGameStorageKey);
     setSession(null);
   }} />;
 }
@@ -192,6 +220,7 @@ function Home({
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const hasSavedLocal = Boolean(savedLocalGame());
+  const onlineGame = savedOnlineGame();
   const refresh = () => api.publicGames().then(setGames).catch(() => setGames([]));
   useEffect(() => {
     void refresh();
@@ -238,6 +267,18 @@ function Home({
         {hasSavedLocal && (
           <button className="action-card" onClick={onResumeLocal}>
             <span>📜</span><strong>Continuar partida local</strong><small>Retomá la campaña guardada en este dispositivo</small>
+          </button>
+        )}
+        {onlineGame && (
+          <button className="action-card" onClick={async () => {
+            try {
+              setError("");
+              onGame(await api.joinGame(onlineGame.code, session));
+            } catch (caught) {
+              setError(caught instanceof Error ? caught.message : "No se pudo retomar la partida.");
+            }
+          }}>
+            <span>↻</span><strong>Continuar partida online</strong><small>{onlineGame.name} · {onlineGame.code}</small>
           </button>
         )}
       </section>

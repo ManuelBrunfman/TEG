@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import cors from "cors";
 import express from "express";
 import { createServer } from "node:http";
-import { Server } from "socket.io";
+import { Server, type Socket } from "socket.io";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import type { GameAction, GameSettings, Session } from "../shared/types.js";
@@ -26,6 +26,13 @@ const port = Number(process.env.PORT || 3100);
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, { cors: { origin: true, credentials: true } });
+interface VoiceMember {
+  socketId: string;
+  playerId: string;
+  name: string;
+  avatar: string;
+}
+const voiceRooms = new Map<string, Map<string, VoiceMember>>();
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
@@ -140,7 +147,8 @@ app.post(
     if (game.settings.visibility === "local") throw new Error("Esa partida es local.");
     const session: Session = { ...body.session, registered: false, admin: false };
     upsertUser(session);
-    if (game.status === "lobby") {
+    const isParticipant = game.players.some((player) => player.id === session.id);
+    if (isParticipant || game.status === "lobby") {
       store.join(game, session);
       io.to(game.id).emit("game:state", store.view(game.id));
     } else if (!game.settings.spectators) {
@@ -207,18 +215,28 @@ app.post("/api/admin/games/:id/close", (request, response) => {
 });
 
 io.on("connection", (socket) => {
-  socket.on("game:watch", ({ gameId, playerId }: { gameId: string; playerId?: string }) => {
-    try {
-      socket.join(gameId);
-      socket.data.gameId = gameId;
-      socket.data.playerId = playerId;
-      if (playerId) store.connect(gameId, playerId, true);
-      socket.emit("game:state", store.view(gameId, playerId));
-      broadcast(gameId);
-    } catch (error) {
-      socket.emit("game:error", error instanceof Error ? error.message : "No se pudo entrar.");
+  socket.on(
+    "game:watch",
+    (
+      { gameId, playerId }: { gameId: string; playerId?: string },
+      acknowledge?: (result: { ok: boolean; error?: string }) => void
+    ) => {
+      try {
+        leaveVoice(socket);
+        socket.join(gameId);
+        socket.data.gameId = gameId;
+        socket.data.playerId = playerId;
+        if (playerId) store.connect(gameId, playerId, true);
+        socket.emit("game:state", store.view(gameId, playerId));
+        broadcast(gameId);
+        acknowledge?.({ ok: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "No se pudo entrar.";
+        acknowledge?.({ ok: false, error: message });
+        socket.emit("game:error", message);
+      }
     }
-  });
+  );
 
   socket.on(
     "game:action",
@@ -239,16 +257,16 @@ io.on("connection", (socket) => {
   socket.on(
     "game:chat",
     (
-      payload: { gameId: string; playerId: string; text: string },
+      payload: { gameId: string; text: string },
       acknowledge?: (result: { ok: boolean; error?: string }) => void
     ) => {
       try {
         const connection = socket.data as { gameId?: string; playerId?: string };
-        if (connection.gameId !== payload.gameId || connection.playerId !== payload.playerId) {
+        if (connection.gameId !== payload.gameId || !connection.playerId) {
           throw new Error("La conexión del chat no corresponde a este jugador.");
         }
-        store.message(payload.gameId, payload.playerId, payload.text);
-        broadcast(payload.gameId);
+        const message = store.message(payload.gameId, connection.playerId, payload.text);
+        io.to(payload.gameId).emit("game:chat-message", message);
         acknowledge?.({ ok: true });
       } catch (error) {
         const message = error instanceof Error ? error.message : "No se pudo enviar.";
@@ -258,7 +276,68 @@ io.on("connection", (socket) => {
     }
   );
 
+  socket.on(
+    "game:voice-join",
+    (
+      payload: { gameId: string },
+      acknowledge?: (result: { ok: boolean; peers?: VoiceMember[]; error?: string }) => void
+    ) => {
+      try {
+        const connection = socket.data as { gameId?: string; playerId?: string; voiceGameId?: string };
+        if (connection.gameId !== payload.gameId || !connection.playerId) {
+          throw new Error("La conexión de voz no corresponde a este jugador.");
+        }
+        const game = store.get(payload.gameId);
+        const player = game?.players.find((candidate) => candidate.id === connection.playerId && !candidate.eliminated);
+        if (!game || !player) throw new Error("Solo los jugadores de la partida pueden usar la voz.");
+
+        leaveVoice(socket);
+        const roomName = `voice:${payload.gameId}`;
+        const room = voiceRooms.get(payload.gameId) ?? new Map<string, VoiceMember>();
+        const peers = [...room.values()];
+        const member: VoiceMember = {
+          socketId: socket.id,
+          playerId: player.id,
+          name: player.name,
+          avatar: player.avatar
+        };
+        room.set(socket.id, member);
+        voiceRooms.set(payload.gameId, room);
+        socket.data.voiceGameId = payload.gameId;
+        socket.join(roomName);
+        socket.to(roomName).emit("game:voice-peer-joined", member);
+        acknowledge?.({ ok: true, peers });
+      } catch (error) {
+        acknowledge?.({
+          ok: false,
+          error: error instanceof Error ? error.message : "No se pudo activar la sala de voz."
+        });
+      }
+    }
+  );
+
+  socket.on(
+    "game:voice-signal",
+    (payload: { gameId: string; target: string; description?: unknown; candidate?: unknown }) => {
+      const connection = socket.data as { voiceGameId?: string };
+      const room = voiceRooms.get(payload.gameId);
+      const sender = room?.get(socket.id);
+      if (connection.voiceGameId !== payload.gameId || !sender || !room?.has(payload.target)) return;
+      io.to(payload.target).emit("game:voice-signal", {
+        from: socket.id,
+        playerId: sender.playerId,
+        name: sender.name,
+        avatar: sender.avatar,
+        description: payload.description,
+        candidate: payload.candidate
+      });
+    }
+  );
+
+  socket.on("game:voice-leave", () => leaveVoice(socket));
+
   socket.on("disconnect", () => {
+    leaveVoice(socket);
     const { gameId, playerId } = socket.data as { gameId?: string; playerId?: string };
     if (gameId && playerId) {
       try {
@@ -270,6 +349,18 @@ io.on("connection", (socket) => {
     }
   });
 });
+
+function leaveVoice(socket: Socket) {
+  const gameId = socket.data.voiceGameId as string | undefined;
+  if (!gameId) return;
+  const room = voiceRooms.get(gameId);
+  if (room?.delete(socket.id)) {
+    socket.to(`voice:${gameId}`).emit("game:voice-peer-left", { socketId: socket.id });
+    if (room.size === 0) voiceRooms.delete(gameId);
+  }
+  socket.leave(`voice:${gameId}`);
+  delete socket.data.voiceGameId;
+}
 
 function broadcast(gameId: string) {
   for (const socket of io.sockets.sockets.values()) {

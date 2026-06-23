@@ -41,6 +41,7 @@ export interface PlayerState {
 }
 
 export interface BattleResult {
+  id: string;
   from: number;
   to: number;
   attackerDice: number[];

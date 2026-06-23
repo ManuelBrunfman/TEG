@@ -88,9 +88,9 @@ export function addPlayer(
   state: GameState,
   input: { id?: string; name: string; avatar?: string; isBot?: boolean }
 ): GameState {
+  if (input.id && state.players.some((player) => player.id === input.id)) return state;
   if (state.status !== "lobby") throw new Error("La partida ya comenzó.");
   if (state.players.length >= state.settings.maxPlayers) throw new Error("La mesa está completa.");
-  if (state.players.some((player) => player.id === input.id)) return state;
   const color = PLAYER_COLORS[state.players.length];
   state.players.push({
     id: input.id ?? `bot-${nanoid(8)}`,
@@ -418,7 +418,16 @@ function attack(state: GameState, fromId: number, toId: number, requestedDice?: 
       }
     }
   }
-  state.lastBattle = { from: fromId, to: toId, attackerDice, defenderDice, attackerLosses, defenderLosses, conquered };
+  state.lastBattle = {
+    id: nanoid(10),
+    from: fromId,
+    to: toId,
+    attackerDice,
+    defenderDice,
+    attackerLosses,
+    defenderLosses,
+    conquered
+  };
   if (state.status !== "finished" && occupationMissionCompleted(state, attacker)) {
     const reason = state.players.length <= 3
       ? "Conquistó los 50 territorios."
@@ -622,6 +631,7 @@ export function applyAction(state: GameState, actorId: string, action: GameActio
     case "end-attack":
       if (state.phase !== "attack") throw new Error("No es la fase de ataque.");
       state.phase = "regroup";
+      state.lastBattle = null;
       state.regroupLocked = {};
       resetDeadline(state);
       break;

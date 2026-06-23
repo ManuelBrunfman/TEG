@@ -11,7 +11,7 @@ interface Props {
   showCountryNames: boolean;
 }
 
-const asset = (file: string) => `/map/teg/${file}`;
+const asset = (file: string) => `${import.meta.env.BASE_URL}map/teg/${file}`;
 const armyRadius = (armies: number) => {
   if (armies <= 2) return 7;
   if (armies <= 4) return 8;

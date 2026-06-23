@@ -11,7 +11,7 @@ import {
   startGame,
   systemMessage
 } from "../shared/game.js";
-import type { GameAction, GameSettings, GameState, Session } from "../shared/types.js";
+import type { ChatMessage, GameAction, GameSettings, GameState, Session } from "../shared/types.js";
 import { loadGames, purgeInactiveGuestUsers, saveGame } from "./db.js";
 
 class GameStore {
@@ -29,6 +29,9 @@ class GameStore {
       game.roundStarterIndex ??= game.activePlayerIndex;
       game.roundStage ??= game.phase === "reinforce" ? "reinforce" : "combat";
       game.pendingConquest ??= null;
+      if (game.lastBattle && !game.lastBattle.id) {
+        game.lastBattle.id = `legacy-${game.updatedAt}`;
+      }
       game.players.forEach((player) => {
         player.cards = player.cards.map((card) => ({
           ...card,
@@ -98,23 +101,23 @@ class GameStore {
     return game;
   }
 
-  message(gameId: string, actorId: string, text: string) {
+  message(gameId: string, actorId: string, text: string): ChatMessage {
     const game = this.required(gameId);
     const player = game.players.find((item) => item.id === actorId);
     if (!player) throw new Error("Los espectadores no pueden escribir.");
     const clean = text.trim().slice(0, 400);
-    if (!clean) return game;
-    game.messages.push({
+    if (!clean) throw new Error("El mensaje está vacío.");
+    const message: ChatMessage = {
       id: randomUUID(),
       playerId: actorId,
       playerName: player.name,
       text: clean,
       createdAt: Date.now()
-    });
+    };
+    game.messages.push(message);
     game.messages = game.messages.slice(-150);
-    game.updatedAt = Date.now();
     saveGame(game);
-    return game;
+    return message;
   }
 
   connect(gameId: string, playerId: string, connected: boolean) {

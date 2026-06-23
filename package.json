@@ -11,6 +11,7 @@
     "start": "node dist-server/server/index.js",
     "share": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/share.ps1",
     "test": "tsc -p tsconfig.test.json && node dist-test/shared/game.test.js",
+    "test:voice": "node scripts/voice-smoke.mjs",
     "check": "tsc --noEmit && tsc -p tsconfig.server.json --noEmit"
   },
   "dependencies": {

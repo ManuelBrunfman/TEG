@@ -37,6 +37,21 @@ function finishInitialPlacement(game: ReturnType<typeof startedGame>) {
 }
 
 describe("motor de Reinos en Guerra", () => {
+  it("permite que un participante existente vuelva a ingresar después de comenzar", () => {
+    const game = startedGame();
+    const player = game.players.find((item) => item.id === host.id)!;
+    const updatedAt = game.updatedAt;
+
+    assert.doesNotThrow(() => addPlayer(game, { id: host.id, name: host.name, avatar: host.avatar }));
+    assert.equal(game.players.length, 2);
+    assert.equal(game.players.find((item) => item.id === host.id), player);
+    assert.equal(game.updatedAt, updatedAt);
+    assert.throws(
+      () => addPlayer(game, { id: "player-three", name: "Carla" }),
+      /ya comenz/
+    );
+  });
+
   it("reparte los 50 territorios de forma equilibrada", () => {
     const game = startedGame();
     assert.equal(game.countries.length, 50);
@@ -169,12 +184,16 @@ describe("motor de Reinos en Guerra", () => {
     try {
       applyAction(game, attacker.id, { type: "attack", from: 0, to: 1 });
       assert.equal(game.countries[1].ownerId, attacker.id);
+      assert.ok(game.lastBattle?.id);
       assert.equal(game.lastBattle?.conquered, true);
       assert.equal(game.phase, "occupy");
       assert.deepEqual([game.pendingConquest?.minimum, game.pendingConquest?.maximum], [1, 3]);
       applyAction(game, attacker.id, { type: "occupy", count: 3 });
       assert.equal(game.phase, "attack");
       assert.equal(game.countries[1].armies, 3);
+      applyAction(game, attacker.id, { type: "end-attack" });
+      assert.equal(game.phase, "regroup");
+      assert.equal(game.lastBattle, null);
     } finally {
       Math.random = originalRandom;
     }

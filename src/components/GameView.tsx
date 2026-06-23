@@ -3,7 +3,7 @@ import { io, type Socket } from "socket.io-client";
 import { ADJACENCY, CONTINENTS, COUNTRIES, areAdjacent } from "@shared/map";
 import { missionText } from "@shared/missions";
 import { applyAction, findValidExchangeCards, handleTimeout, runBotStep, validExchange } from "@shared/game";
-import type { BattleResult, ContinentId, GameAction, GameState, Session } from "@shared/types";
+import type { BattleResult, ChatMessage, ContinentId, GameAction, GameState, Session } from "@shared/types";
 import { api, type FriendsState } from "../api";
 import { MapBoard } from "./MapBoard";
 
@@ -12,6 +12,19 @@ interface Props {
   session: Session;
   local: boolean;
   onExit: (finished?: boolean) => void;
+}
+
+interface VoicePeer {
+  socketId: string;
+  playerId: string;
+  name: string;
+  avatar: string;
+}
+
+interface VoiceSignal extends Omit<VoicePeer, "socketId"> {
+  from: string;
+  description?: RTCSessionDescriptionInit;
+  candidate?: RTCIceCandidateInit;
 }
 
 const phaseText: Record<GameState["phase"], string> = {
@@ -36,70 +49,17 @@ const phaseDetails: Record<GameState["phase"], { icon: string; kind: string; ste
 
 const diceFaces = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"];
 
-interface MusicController {
-  context: AudioContext;
-  intervalId: number;
-  drones: OscillatorNode[];
-}
+const audioFiles = {
+  music: `${import.meta.env.BASE_URL}audio/celebration.mp3`,
+  dice: `${import.meta.env.BASE_URL}audio/dice-roll.mp3`,
+  battle: `${import.meta.env.BASE_URL}audio/battle.mp3`
+};
 
-function startMedievalMusic(): MusicController {
-  const context = new window.AudioContext();
-  const master = context.createGain();
-  master.gain.value = 0.075;
-  master.connect(context.destination);
-
-  const drones = [73.42, 110].map((frequency, index) => {
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    oscillator.type = index === 0 ? "triangle" : "sine";
-    oscillator.frequency.value = frequency;
-    gain.gain.value = index === 0 ? 0.22 : 0.12;
-    oscillator.connect(gain).connect(master);
-    oscillator.start();
-    return oscillator;
-  });
-
-  const melody = [146.83, 174.61, 196, 220, 261.63, 293.66, 220, 196];
-  let noteIndex = 0;
-  const playPhrase = () => {
-    const now = context.currentTime;
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    oscillator.type = "triangle";
-    oscillator.frequency.value = melody[noteIndex % melody.length];
-    gain.gain.setValueAtTime(0.0001, now);
-    gain.gain.exponentialRampToValueAtTime(0.35, now + 0.035);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.72);
-    oscillator.connect(gain).connect(master);
-    oscillator.start(now);
-    oscillator.stop(now + 0.75);
-    if (noteIndex % 4 === 0) {
-      const drum = context.createOscillator();
-      const drumGain = context.createGain();
-      drum.type = "sine";
-      drum.frequency.setValueAtTime(92, now);
-      drum.frequency.exponentialRampToValueAtTime(46, now + 0.2);
-      drumGain.gain.setValueAtTime(0.42, now);
-      drumGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
-      drum.connect(drumGain).connect(master);
-      drum.start(now);
-      drum.stop(now + 0.3);
-    }
-    noteIndex += 1;
-  };
-  playPhrase();
-  const intervalId = window.setInterval(playPhrase, 850);
-  void context.resume();
-  return { context, intervalId, drones };
-}
-
-function stopMedievalMusic(controller: MusicController | null) {
-  if (!controller) return;
-  window.clearInterval(controller.intervalId);
-  controller.drones.forEach((oscillator) => {
-    try { oscillator.stop(); } catch { /* already stopped */ }
-  });
-  void controller.context.close();
+function createAudio(src: string, volume: number) {
+  const audio = new Audio(src);
+  audio.volume = volume;
+  audio.preload = "auto";
+  return audio;
 }
 
 export function GameView({ initialGame, session, local, onExit }: Props) {
@@ -121,7 +81,10 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
     paused: initialGame.paused ?? false,
     pauseVotes: initialGame.pauseVotes ?? [],
     pausedRemainingMs: initialGame.pausedRemainingMs ?? null,
-    regroupLocked: initialGame.regroupLocked ?? {}
+    regroupLocked: initialGame.regroupLocked ?? {},
+    lastBattle: initialGame.lastBattle
+      ? { ...initialGame.lastBattle, id: initialGame.lastBattle.id ?? `legacy-${initialGame.updatedAt}` }
+      : null
   }));
   const [selected, setSelected] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -134,7 +97,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   const [colorBlind, setColorBlind] = useState(false);
   const [showCountryNames, setShowCountryNames] = useState(false);
   const [soundOn, setSoundOn] = useState(() => localStorage.getItem("teg-sound") !== "off");
-  const [musicOn, setMusicOn] = useState(false);
+  const [musicOn, setMusicOn] = useState(() => localStorage.getItem("teg-music") !== "off");
   const [reinforcementSource, setReinforcementSource] = useState<"base" | ContinentId>("base");
   const [battlePresentation, setBattlePresentation] = useState<{ battle: BattleResult; rolling: boolean } | null>(null);
   const [pactCountryId, setPactCountryId] = useState<number | "">("");
@@ -142,11 +105,94 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   const [invitedFriends, setInvitedFriends] = useState<string[]>([]);
   const [localRevealed, setLocalRevealed] = useState(!local);
   const [now, setNow] = useState(Date.now());
+  const [voiceStatus, setVoiceStatus] = useState<"off" | "connecting" | "active">("off");
+  const [voicePeers, setVoicePeers] = useState<Record<string, VoicePeer>>({});
   const socketRef = useRef<Socket | null>(null);
-  const musicRef = useRef<MusicController | null>(null);
+  const musicRef = useRef<HTMLAudioElement | null>(null);
+  const localVoiceStreamRef = useRef<MediaStream | null>(null);
+  const voiceConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const voiceAudioRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const pendingVoiceCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   const active = game.players[game.activePlayerIndex];
   const me = local ? active : game.players.find((player) => player.id === session.id);
   const isMyTurn = local ? true : active?.id === session.id;
+
+  const closeVoicePeer = (socketId: string) => {
+    voiceConnectionsRef.current.get(socketId)?.close();
+    voiceConnectionsRef.current.delete(socketId);
+    const audio = voiceAudioRef.current.get(socketId);
+    if (audio) {
+      audio.pause();
+      audio.srcObject = null;
+    }
+    voiceAudioRef.current.delete(socketId);
+    pendingVoiceCandidatesRef.current.delete(socketId);
+    setVoicePeers((current) => {
+      if (!current[socketId]) return current;
+      const next = { ...current };
+      delete next[socketId];
+      return next;
+    });
+  };
+
+  const ensureVoicePeer = async (peer: VoicePeer, createOffer: boolean) => {
+    const existing = voiceConnectionsRef.current.get(peer.socketId);
+    if (existing) return existing;
+    const stream = localVoiceStreamRef.current;
+    const socket = socketRef.current;
+    if (!stream || !socket) throw new Error("El micrófono todavía no está listo.");
+
+    const connection = new RTCPeerConnection({
+      iceServers: [
+        { urls: "stun:stun.l.google.com:19302" },
+        { urls: "stun:stun1.l.google.com:19302" }
+      ]
+    });
+    voiceConnectionsRef.current.set(peer.socketId, connection);
+    setVoicePeers((current) => ({ ...current, [peer.socketId]: peer }));
+    stream.getTracks().forEach((track) => connection.addTrack(track, stream));
+
+    connection.onicecandidate = (event) => {
+      if (!event.candidate) return;
+      socket.emit("game:voice-signal", {
+        gameId: game.id,
+        target: peer.socketId,
+        candidate: event.candidate.toJSON()
+      });
+    };
+    connection.ontrack = (event) => {
+      const audio = voiceAudioRef.current.get(peer.socketId) ?? new Audio();
+      audio.autoplay = true;
+      audio.srcObject = event.streams[0];
+      voiceAudioRef.current.set(peer.socketId, audio);
+      void audio.play().catch(() => undefined);
+    };
+    connection.onconnectionstatechange = () => {
+      if (connection.connectionState === "failed" || connection.connectionState === "closed") {
+        closeVoicePeer(peer.socketId);
+      }
+    };
+
+    if (createOffer) {
+      const offer = await connection.createOffer();
+      await connection.setLocalDescription(offer);
+      socket.emit("game:voice-signal", {
+        gameId: game.id,
+        target: peer.socketId,
+        description: connection.localDescription
+      });
+    }
+    return connection;
+  };
+
+  const stopVoice = (notifyServer = true) => {
+    if (notifyServer) socketRef.current?.emit("game:voice-leave");
+    for (const socketId of [...voiceConnectionsRef.current.keys()]) closeVoicePeer(socketId);
+    localVoiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+    localVoiceStreamRef.current = null;
+    setVoicePeers({});
+    setVoiceStatus("off");
+  };
 
   useEffect(() => {
     if (local && active && !active.isBot) setLocalRevealed(false);
@@ -183,14 +229,32 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
     const socket = io();
     socketRef.current = socket;
     socket.on("connect", () => {
-      socket.emit("game:watch", { gameId: game.id, playerId: session.id });
-      setChatStatus("connected");
+      setChatStatus("connecting");
+      socket.timeout(5000).emit(
+        "game:watch",
+        { gameId: game.id, playerId: session.id },
+        (timeoutError: Error | null, result?: { ok: boolean; error?: string }) => {
+          if (timeoutError || !result?.ok) {
+            setChatStatus("disconnected");
+            setError(result?.error || "No se pudo conectar el chat.");
+            return;
+          }
+          setChatStatus("connected");
+        }
+      );
     });
-    socket.on("disconnect", () => setChatStatus("disconnected"));
+    socket.on("disconnect", () => {
+      setChatStatus("disconnected");
+      stopVoice(false);
+    });
+    socket.on("connect_error", () => setChatStatus("disconnected"));
     socket.on("game:state", (next: GameState) => {
       setGame({
         ...next,
-        placementHistory: next.placementHistory ?? []
+        placementHistory: next.placementHistory ?? [],
+        lastBattle: next.lastBattle
+          ? { ...next.lastBattle, id: next.lastBattle.id ?? `legacy-${next.updatedAt}` }
+          : null
       });
       setSelected(null);
       setRegroupDraft(null);
@@ -200,8 +264,55 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
         )
       );
     });
+    socket.on("game:chat-message", (message: ChatMessage) => {
+      setGame((current) => {
+        if (current.messages.some((item) => item.id === message.id)) return current;
+        return { ...current, messages: [...current.messages, message].slice(-150) };
+      });
+    });
+    socket.on("game:voice-peer-joined", (peer: VoicePeer) => {
+      setVoicePeers((current) => ({ ...current, [peer.socketId]: peer }));
+    });
+    socket.on("game:voice-peer-left", ({ socketId }: { socketId: string }) => closeVoicePeer(socketId));
+    socket.on("game:voice-signal", async (signal: VoiceSignal) => {
+      try {
+        const peer: VoicePeer = {
+          socketId: signal.from,
+          playerId: signal.playerId,
+          name: signal.name,
+          avatar: signal.avatar
+        };
+        const connection = await ensureVoicePeer(peer, false);
+        if (signal.description) {
+          await connection.setRemoteDescription(signal.description);
+          const queued = pendingVoiceCandidatesRef.current.get(signal.from) ?? [];
+          pendingVoiceCandidatesRef.current.delete(signal.from);
+          for (const candidate of queued) await connection.addIceCandidate(candidate);
+          if (signal.description.type === "offer") {
+            const answer = await connection.createAnswer();
+            await connection.setLocalDescription(answer);
+            socket.emit("game:voice-signal", {
+              gameId: game.id,
+              target: signal.from,
+              description: connection.localDescription
+            });
+          }
+        }
+        if (signal.candidate) {
+          if (connection.remoteDescription) await connection.addIceCandidate(signal.candidate);
+          else {
+            const queued = pendingVoiceCandidatesRef.current.get(signal.from) ?? [];
+            pendingVoiceCandidatesRef.current.set(signal.from, [...queued, signal.candidate]);
+          }
+        }
+      } catch {
+        closeVoicePeer(signal.from);
+        setError("No se pudo conectar el audio con uno de los jugadores.");
+      }
+    });
     socket.on("game:error", setError);
     return () => {
+      stopVoice(false);
       socket.disconnect();
     };
   }, [game.id, local, session.id]);
@@ -217,49 +328,64 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   }, [game, local]);
 
   useEffect(() => {
-    if (!game.lastBattle) {
+    const battle = game.lastBattle;
+    if (!battle) {
       setBattlePresentation(null);
       return;
     }
-    setBattlePresentation({ battle: game.lastBattle, rolling: true });
+    setBattlePresentation({ battle, rolling: true });
     const settleTimer = window.setTimeout(() => {
       setBattlePresentation((current) => current ? { ...current, rolling: false } : null);
     }, 650);
     const hideTimer = window.setTimeout(() => setBattlePresentation(null), 2300);
+    let diceAudio: HTMLAudioElement | null = null;
+    let battleAudio: HTMLAudioElement | null = null;
+    let battleSoundTimer: number | null = null;
     if (soundOn) {
-      const AudioContextClass = window.AudioContext;
-      const context = new AudioContextClass();
-      const master = context.createGain();
-      master.gain.value = 0.23;
-      master.connect(context.destination);
-      [0, 0.08, 0.16].forEach((delay, index) => {
-        const oscillator = context.createOscillator();
-        const gain = context.createGain();
-        const startsAt = context.currentTime + delay;
-        oscillator.type = index === 1 ? "square" : "triangle";
-        oscillator.frequency.setValueAtTime(game.lastBattle!.conquered ? 170 + index * 45 : 115 + index * 28, startsAt);
-        oscillator.frequency.exponentialRampToValueAtTime(game.lastBattle!.conquered ? 520 : 190, startsAt + 0.2);
-        gain.gain.setValueAtTime(index === 1 ? 0.12 : 0.24, startsAt);
-        gain.gain.exponentialRampToValueAtTime(0.001, startsAt + 0.24);
-        oscillator.connect(gain).connect(master);
-        oscillator.start(startsAt);
-        oscillator.stop(startsAt + 0.25);
-      });
-      window.setTimeout(() => void context.close(), 650);
-      void context.resume();
+      diceAudio = createAudio(audioFiles.dice, 0.5);
+      void diceAudio.play().catch(() => undefined);
+      battleSoundTimer = window.setTimeout(() => {
+        battleAudio = createAudio(audioFiles.battle, battle.conquered ? 0.3 : 0.2);
+        void battleAudio.play().catch(() => undefined);
+      }, 620);
     }
-    navigator.vibrate?.(game.lastBattle.conquered ? [45, 40, 80] : 45);
+    navigator.vibrate?.(battle.conquered ? [45, 40, 80] : 45);
     return () => {
       window.clearTimeout(settleTimer);
       window.clearTimeout(hideTimer);
+      if (battleSoundTimer !== null) window.clearTimeout(battleSoundTimer);
+      diceAudio?.pause();
+      battleAudio?.pause();
     };
-  }, [game.lastBattle]);
+  }, [game.lastBattle?.id]);
 
   useEffect(() => {
     localStorage.setItem("teg-sound", soundOn ? "on" : "off");
   }, [soundOn]);
 
-  useEffect(() => () => stopMedievalMusic(musicRef.current), []);
+  useEffect(() => {
+    localStorage.setItem("teg-music", musicOn ? "on" : "off");
+    if (!musicOn) {
+      musicRef.current?.pause();
+      return;
+    }
+    const music = musicRef.current ?? createAudio(audioFiles.music, 0.16);
+    music.loop = true;
+    musicRef.current = music;
+    const play = () => void music.play().catch(() => undefined);
+    play();
+    window.addEventListener("pointerdown", play, { once: true });
+    window.addEventListener("keydown", play, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", play);
+      window.removeEventListener("keydown", play);
+    };
+  }, [musicOn]);
+
+  useEffect(() => () => {
+    musicRef.current?.pause();
+    musicRef.current = null;
+  }, []);
 
   useEffect(() => {
     if (!["setup-5", "setup-3", "reinforce"].includes(game.phase)) return;
@@ -360,18 +486,54 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   }, [game.players, game.roundStarterIndex]);
   const currentOrderPosition = orderedPlayers.findIndex(({ index }) => index === game.activePlayerIndex);
 
-  const toggleMusic = () => {
-    if (musicOn) {
-      stopMedievalMusic(musicRef.current);
-      musicRef.current = null;
-      setMusicOn(false);
+  const toggleMusic = () => setMusicOn((current) => !current);
+
+  const startVoice = async () => {
+    const socket = socketRef.current;
+    if (!socket?.connected) {
+      setError("La conexión está desconectada. No se pudo activar la voz.");
       return;
     }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError("Este navegador no permite usar el micrófono.");
+      return;
+    }
+    setError("");
+    setVoiceStatus("connecting");
     try {
-      musicRef.current = startMedievalMusic();
-      setMusicOn(true);
-    } catch {
-      setError("El navegador no pudo iniciar la música. Tocá nuevamente después de interactuar con la pantalla.");
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
+        video: false
+      });
+      localVoiceStreamRef.current = stream;
+      socket.timeout(5000).emit(
+        "game:voice-join",
+        { gameId: game.id },
+        async (
+          timeoutError: Error | null,
+          result?: { ok: boolean; peers?: VoicePeer[]; error?: string }
+        ) => {
+          if (timeoutError || !result?.ok) {
+            stopVoice(false);
+            setError(result?.error || "No se pudo entrar a la sala de voz.");
+            return;
+          }
+          setVoiceStatus("active");
+          try {
+            await Promise.all((result.peers ?? []).map((peer) => ensureVoicePeer(peer, true)));
+          } catch {
+            setError("No se pudo conectar el audio con todos los jugadores.");
+          }
+        }
+      );
+    } catch (caught) {
+      stopVoice(false);
+      const denied = caught instanceof DOMException && (caught.name === "NotAllowedError" || caught.name === "PermissionDeniedError");
+      setError(denied ? "El permiso del micrófono fue rechazado." : "No se pudo acceder al micrófono.");
     }
   };
 
@@ -387,7 +549,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
     setChatStatus("sending");
     socket.timeout(5000).emit(
       "game:chat",
-      { gameId: game.id, playerId: session.id, text },
+      { gameId: game.id, text },
       (timeoutError: Error | null, result?: { ok: boolean; error?: string }) => {
         if (timeoutError) {
           setError("El servidor no respondió al mensaje. Probá nuevamente.");
@@ -590,9 +752,134 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
           </nav>
 
           {tab === "ordenes" && (
-            <div className="command-content">
-              <p className="eyebrow">{isMyTurn ? "Tu turno" : `Turno de ${active?.name}`}</p>
-              <h2>{phaseText[game.phase]}</h2>
+            <section className={`order-quickbar order-quickbar--${phase.kind}`} aria-label="Acciones del turno">
+              <div className="order-quickbar-status">
+                <small>{phaseText[game.phase]}</small>
+                <strong>
+                  {!isMyTurn
+                    ? `Esperando a ${active?.name ?? "otro jugador"}`
+                    : ["setup-5", "setup-3", "reinforce"].includes(game.phase)
+                      ? game.reinforcements > 0 ? `${game.reinforcements} por ubicar` : "Listo para confirmar"
+                      : game.phase === "attack"
+                        ? selectedName || "Elegí atacante"
+                        : game.phase === "regroup"
+                          ? regroupDraft ? "Movimiento preparado" : selectedName || "Elegí origen"
+                          : game.phase === "occupy"
+                            ? "Elegí cuántos mover"
+                            : "Turno finalizado"}
+                </strong>
+              </div>
+              <div className="order-quickbar-actions">
+                {["setup-5", "setup-3", "reinforce"].includes(game.phase) && (
+                  <>
+                    <button
+                      className="button button--secondary button--compact"
+                      disabled={!isMyTurn || game.placementHistory.length === 0}
+                      onClick={() => dispatch({ type: "undo-place" })}
+                    >
+                      ↶ Deshacer
+                    </button>
+                    <button
+                      className="button button--compact"
+                      disabled={!isMyTurn || game.reinforcements > 0}
+                      onClick={() => dispatch({ type: "confirm-placement" })}
+                    >
+                      Confirmar
+                    </button>
+                  </>
+                )}
+                {game.phase === "attack" && (
+                  <button
+                    className="button button--secondary button--compact"
+                    disabled={!isMyTurn}
+                    onClick={() => dispatch({ type: "end-attack" })}
+                  >
+                    Finalizar ataques
+                  </button>
+                )}
+                {game.phase === "regroup" && regroupDraft && (
+                  <>
+                    <button
+                      className="button button--compact"
+                      disabled={!isMyTurn}
+                      onClick={() => dispatch({
+                        type: "regroup",
+                        from: regroupDraft.from,
+                        to: regroupDraft.to,
+                        count: regroupCount
+                      })}
+                    >
+                      Mover {regroupCount}
+                    </button>
+                    <button
+                      className="button button--secondary button--compact"
+                      onClick={() => {
+                        setRegroupDraft(null);
+                        setSelected(null);
+                      }}
+                    >
+                      Cancelar
+                    </button>
+                  </>
+                )}
+                {game.phase === "regroup" && !regroupDraft && (
+                  <button
+                    className="button button--compact"
+                    disabled={!isMyTurn}
+                    onClick={() => dispatch({ type: "end-turn" })}
+                  >
+                    Finalizar turno
+                  </button>
+                )}
+              </div>
+            </section>
+          )}
+
+          {tab === "ordenes" && game.phase === "occupy" && game.pendingConquest && (
+            <section className="order-focus order-focus--occupy" aria-label="Elegir ejércitos de ocupación">
+              <div className="occupation-choice">
+                <p>
+                  Conquistaste <strong>{COUNTRIES[game.pendingConquest.to].name}</strong>. Pasá ejércitos desde{" "}
+                  <strong>{COUNTRIES[game.pendingConquest.from].name}</strong>.
+                </p>
+                <div className="choice-buttons">
+                  {Array.from(
+                    { length: game.pendingConquest.maximum - game.pendingConquest.minimum + 1 },
+                    (_, index) => game.pendingConquest!.minimum + index
+                  ).map((count) => (
+                    <button className="button" disabled={!isMyTurn} key={count} onClick={() => dispatch({ type: "occupy", count })}>
+                      Mover {count}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </section>
+          )}
+
+          {tab === "ordenes" && game.phase === "regroup" && regroupDraft && (
+            <section className="order-focus order-focus--regroup" aria-label="Elegir ejércitos para reagrupar">
+              <div className="regroup-choice">
+                <strong>{COUNTRIES[regroupDraft.from].name} → {COUNTRIES[regroupDraft.to].name}</strong>
+                <label>
+                  <span>Cantidad: <b>{regroupCount}</b></span>
+                  <input
+                    type="range"
+                    min="1"
+                    max={regroupDraft.maximum}
+                    value={regroupCount}
+                    onChange={(event) => setRegroupCount(Number(event.target.value))}
+                  />
+                </label>
+              </div>
+            </section>
+          )}
+
+          {tab === "ordenes" && (
+            <div className="command-content command-content--orders">
+              <div className="order-phase-heading">
+                <p className="eyebrow">{isMyTurn ? "Tu turno" : `Turno de ${active?.name}`}</p>
+                <h2>{phaseText[game.phase]}</h2>
+              </div>
               {["setup-5", "setup-3", "reinforce"].includes(game.phase) && (
                 <>
                   <div className="army-count"><strong>{game.reinforcements}</strong><span>ejércitos por ubicar</span></div>
@@ -629,83 +916,19 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                       ? ` del bonus de ${CONTINENTS[reinforcementSource].name}.`
                       : " libre."}
                   </p>
-                  <div className="placement-actions">
-                    <button
-                      className="button button--secondary"
-                      disabled={!isMyTurn || game.placementHistory.length === 0}
-                      onClick={() => dispatch({ type: "undo-place" })}
-                    >
-                      ↶ Deshacer última ficha
-                    </button>
-                    <button
-                      className="button"
-                      disabled={!isMyTurn || game.reinforcements > 0}
-                      onClick={() => dispatch({ type: "confirm-placement" })}
-                    >
-                      Confirmar colocación
-                    </button>
-                  </div>
                 </>
               )}
               {game.phase === "attack" && (
                 <>
                   <p>Elegí un territorio propio y luego uno enemigo limítrofe. Los dados se tiran automáticamente.</p>
                   {selected !== null && <div className="selection-card">Atacante: <strong>{selectedName}</strong></div>}
-                  <button className="button button--secondary" disabled={!isMyTurn} onClick={() => dispatch({ type: "end-attack" })}>
-                    Finalizar ataques
-                  </button>
                 </>
               )}
-              {game.phase === "occupy" && game.pendingConquest && (
-                <div className="occupation-choice">
-                  <p>
-                    Conquistaste <strong>{COUNTRIES[game.pendingConquest.to].name}</strong>. Elegí cuántos ejércitos pasan desde{" "}
-                    <strong>{COUNTRIES[game.pendingConquest.from].name}</strong>.
-                  </p>
-                  <div className="choice-buttons">
-                    {Array.from(
-                      { length: game.pendingConquest.maximum - game.pendingConquest.minimum + 1 },
-                      (_, index) => game.pendingConquest!.minimum + index
-                    ).map((count) => (
-                      <button className="button" disabled={!isMyTurn} key={count} onClick={() => dispatch({ type: "occupy", count })}>
-                        Mover {count}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+              {game.phase === "occupy" && (
+                <p>Debés dejar al menos un ejército en el territorio de origen. El movimiento se realiza al tocar una cantidad.</p>
               )}
               {game.phase === "regroup" && (
-                <>
-                  <p>Elegí origen y destino. Podés mover todos los ejércitos disponibles, dejando uno en origen. Una ficha movida no puede volver a moverse este turno.</p>
-                  {regroupDraft && (
-                    <div className="regroup-choice">
-                      <strong>{COUNTRIES[regroupDraft.from].name} → {COUNTRIES[regroupDraft.to].name}</strong>
-                      <label>
-                        <span>Cantidad: {regroupCount}</span>
-                        <input
-                          type="range"
-                          min="1"
-                          max={regroupDraft.maximum}
-                          value={regroupCount}
-                          onChange={(event) => setRegroupCount(Number(event.target.value))}
-                        />
-                      </label>
-                      <div className="button-row">
-                        <button className="button" onClick={() => dispatch({
-                          type: "regroup",
-                          from: regroupDraft.from,
-                          to: regroupDraft.to,
-                          count: regroupCount
-                        })}>Mover ejércitos</button>
-                        <button className="button button--secondary" onClick={() => {
-                          setRegroupDraft(null);
-                          setSelected(null);
-                        }}>Cancelar</button>
-                      </div>
-                    </div>
-                  )}
-                  <button className="button" disabled={!isMyTurn} onClick={() => dispatch({ type: "end-turn" })}>Finalizar turno</button>
-                </>
+                <p>Elegí origen y destino. Podés mover todos los ejércitos disponibles, dejando uno en origen. Una ficha movida no puede volver a moverse este turno.</p>
               )}
               <div className="mission-scroll">
                 <span>Objetivo secreto</span>
@@ -715,14 +938,6 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                 <input type="checkbox" checked={colorBlind} onChange={(event) => setColorBlind(event.target.checked)} />
                 <span>Identificar colores con letras</span>
               </label>
-              <div className="audio-controls">
-                <button className={soundOn ? "active" : ""} onClick={() => setSoundOn((current) => !current)} aria-pressed={soundOn}>
-                  {soundOn ? "🔊" : "🔇"} Efectos
-                </button>
-                <button className={musicOn ? "active" : ""} onClick={toggleMusic} aria-pressed={musicOn}>
-                  {musicOn ? "♫" : "♩"} Música épica
-                </button>
-              </div>
               {game.settings.visibility !== "public" && me && (
                 <button className="button button--secondary" onClick={() => dispatch({ type: "vote-pause" })}>
                   Solicitar pausa ({game.pauseVotes?.length ?? 0}/{game.players.filter((player) => !player.isBot && !player.eliminated).length})
@@ -777,15 +992,36 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
 
           {tab === "chat" && (
             <div className="command-content chat-panel">
-              <div className={`chat-status chat-status--${chatStatus}`}>
-                <i /> {chatStatus === "connected" ? "Chat conectado" : chatStatus === "sending" ? "Enviando…" : chatStatus === "connecting" ? "Conectando…" : "Chat desconectado"}
-              </div>
+              <section className="chat-toolbar" aria-label="Chat y audio">
+                <span
+                  className={`chat-connection chat-connection--${chatStatus}`}
+                  title={chatStatus === "connected" ? "Chat conectado" : chatStatus === "sending" ? "Enviando…" : chatStatus === "connecting" ? "Conectando…" : "Chat desconectado"}
+                >
+                  <i /> Chat
+                </span>
+                <button
+                  className={voiceStatus === "active" ? "active" : ""}
+                  disabled={local || !me || voiceStatus === "connecting"}
+                  onClick={() => voiceStatus === "active" ? stopVoice() : void startVoice()}
+                  aria-pressed={voiceStatus === "active"}
+                  title={local ? "Disponible en partidas online" : voiceStatus === "active" ? `${Object.keys(voicePeers).length + 1} conectados · tocar para salir` : "Activar chat de voz"}
+                >
+                  {voiceStatus === "connecting" ? "…" : voiceStatus === "active" ? "🎙" : "🎧"} <span>Voz</span>
+                </button>
+                <button className={soundOn ? "active" : ""} onClick={() => setSoundOn((current) => !current)} aria-pressed={soundOn} title="Efectos de sonido">
+                  {soundOn ? "🔊" : "🔇"} <span>Efectos</span>
+                </button>
+                <button className={musicOn ? "active" : ""} onClick={toggleMusic} aria-pressed={musicOn} title="Música">
+                  {musicOn ? "♫" : "♩"} <span>Música</span>
+                </button>
+              </section>
               <div className="chat-messages">
                 {game.messages.slice(-60).map((message) => (
                   <div className={message.system ? "chat-message chat-message--system" : "chat-message"} key={message.id}>
                     <strong>{message.playerName}</strong><p>{message.text}</p>
                   </div>
                 ))}
+                {!game.messages.length && <p className="chat-empty">Todavía no hay mensajes.</p>}
               </div>
               {!local && me && (
                 <form className="chat-form" onSubmit={(event) => { event.preventDefault(); sendChat(); }}>
