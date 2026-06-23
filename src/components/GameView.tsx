@@ -1006,16 +1006,18 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                   aria-pressed={voiceStatus === "active"}
                   title={local ? "Disponible en partidas online" : voiceStatus === "active" ? `${Object.keys(voicePeers).length + 1} conectados · tocar para salir` : "Activar chat de voz"}
                 >
-                  <i className={`voice-icon ${voiceStatus === "active" ? "voice-icon--stop" : ""}`}>
+                  <i className={`audio-state-icon ${voiceStatus === "off" ? "audio-state-icon--off" : ""}`}>
                     {voiceStatus === "connecting" ? "…" : "🎙"}
                   </i>
                   <span>Voz</span>
                 </button>
                 <button className={soundOn ? "active" : ""} onClick={() => setSoundOn((current) => !current)} aria-pressed={soundOn} title="Efectos de sonido">
-                  {soundOn ? "🔊" : "🔇"} <span>Efectos</span>
+                  <i className={`audio-state-icon ${soundOn ? "" : "audio-state-icon--off"}`}>🔊</i>
+                  <span>Efectos</span>
                 </button>
                 <button className={musicOn ? "active" : ""} onClick={toggleMusic} aria-pressed={musicOn} title="Música">
-                  {musicOn ? "♫" : "♩"} <span>Música</span>
+                  <i className={`audio-state-icon ${musicOn ? "" : "audio-state-icon--off"}`}>♫</i>
+                  <span>Música</span>
                 </button>
               </section>
               <div className="chat-messages">

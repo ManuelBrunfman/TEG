@@ -448,7 +448,7 @@ h1, h2 { letter-spacing: .015em; }
 .choice-buttons .button { margin: 0; padding-inline: 5px; }
 .regroup-choice label { display: grid; gap: 7px; color: #d7bf89; font-family: system-ui, sans-serif; font-size: .76rem; }
 .regroup-choice input[type="range"] { width: 100%; }
-.chat-panel { width: 100%; height: auto; margin: 0; padding: 0; overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.command-content.chat-panel { width: 100%; height: auto; margin: 0; padding: 0; overflow: hidden; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 .chat-toolbar { width: 100%; margin: 0; display: grid; grid-template-columns: minmax(58px, .75fr) repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 0; padding: 0; border-bottom: 1px solid #503621; background: #17100b; font-family: system-ui, sans-serif; }
 .chat-toolbar button { min-width: 0; min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 4px; margin: 0; padding: 5px 7px; border: 0; border-left: 1px solid #523a25; border-radius: 0; background: #21160f; color: #9c8769; font-size: .62rem; font-weight: 700; white-space: nowrap; }
 .chat-toolbar button.active { border-color: #a4773b; background: #4a301a; color: #f0d8a1; }
@@ -456,9 +456,9 @@ h1, h2 { letter-spacing: .015em; }
 .chat-connection i { width: 7px; height: 7px; border-radius: 50%; background: #b49352; }
 .chat-connection--connected i { background: #69a663; box-shadow: 0 0 6px #69a663; }
 .chat-connection--disconnected i { background: #b94c43; }
-.voice-icon { position: relative; display: inline-grid; place-items: center; min-width: 18px; font-size: .9rem; font-style: normal; line-height: 1; }
-.voice-icon--stop::before { content: ""; position: absolute; width: 17px; height: 17px; border: 1.5px solid #dc6b5c; border-radius: 50%; }
-.voice-icon--stop::after { content: ""; position: absolute; width: 19px; height: 1.8px; border-radius: 2px; background: #dc6b5c; box-shadow: 0 0 2px #1b100b; transform: rotate(-45deg); }
+.audio-state-icon { position: relative; display: inline-grid; place-items: center; min-width: 18px; font-size: .9rem; font-style: normal; line-height: 1; }
+.audio-state-icon--off::before { content: ""; position: absolute; width: 17px; height: 17px; border: 1.5px solid #dc6b5c; border-radius: 50%; }
+.audio-state-icon--off::after { content: ""; position: absolute; width: 19px; height: 1.8px; border-radius: 2px; background: #dc6b5c; box-shadow: 0 0 2px #1b100b; transform: rotate(-45deg); }
 .chat-messages { min-height: 0; overflow-y: auto; padding: 14px; }
 .chat-message { padding: 7px 0; border-bottom: 1px solid #46301f; }
 .chat-message strong { color: #d7ba7c; font-size: .72rem; }
