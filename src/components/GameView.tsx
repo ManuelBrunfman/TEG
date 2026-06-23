@@ -1006,7 +1006,10 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                   aria-pressed={voiceStatus === "active"}
                   title={local ? "Disponible en partidas online" : voiceStatus === "active" ? `${Object.keys(voicePeers).length + 1} conectados · tocar para salir` : "Activar chat de voz"}
                 >
-                  {voiceStatus === "connecting" ? "…" : voiceStatus === "active" ? "🎙" : "🎧"} <span>Voz</span>
+                  <i className={`voice-icon ${voiceStatus === "active" ? "voice-icon--stop" : ""}`}>
+                    {voiceStatus === "connecting" ? "…" : "🎙"}
+                  </i>
+                  <span>Voz</span>
                 </button>
                 <button className={soundOn ? "active" : ""} onClick={() => setSoundOn((current) => !current)} aria-pressed={soundOn} title="Efectos de sonido">
                   {soundOn ? "🔊" : "🔇"} <span>Efectos</span>
@@ -1016,7 +1019,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                 </button>
               </section>
               <div className="chat-messages">
-                {game.messages.slice(-60).map((message) => (
+                {[...game.messages.slice(-60)].reverse().map((message) => (
                   <div className={message.system ? "chat-message chat-message--system" : "chat-message"} key={message.id}>
                     <strong>{message.playerName}</strong><p>{message.text}</p>
                   </div>
