@@ -1,0 +1,137 @@
+/* Extra battle dice presentation. Loaded after styles.css to make each rolled die behave like one real die. */
+.battle-result {
+  width: min(430px, calc(100% - 28px));
+}
+
+.dice-score {
+  align-items: start;
+  gap: 14px;
+}
+
+.dice-score > div {
+  position: relative;
+  min-height: 74px;
+  align-items: center;
+  gap: 7px;
+  padding-top: 22px;
+}
+
+.dice-score > div:first-child::before,
+.dice-score > div:last-child::before {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  color: #c8a76a;
+  font-family: system-ui, sans-serif;
+  font-size: .58rem;
+  font-weight: 900;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.dice-score > div:first-child::before { content: "Atacante"; }
+.dice-score > div:last-child::before { content: "Defensor"; }
+
+.dice-container {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 44px;
+  perspective: 420px;
+  transform-style: preserve-3d;
+}
+
+.dice-cube {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transition: transform .34s cubic-bezier(.18, .82, .28, 1.18);
+}
+
+.dice-face {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid #f2dfb2;
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 35% 28%, rgba(255,255,255,.45), transparent 24%),
+    linear-gradient(145deg, #fff0c4, #d4b679);
+  color: #25170f;
+  box-shadow:
+    inset 0 0 9px rgba(67,35,15,.26),
+    0 5px 10px rgba(0,0,0,.38);
+  backface-visibility: hidden;
+  font-size: 2.15rem;
+  line-height: 1;
+}
+
+.face-front { transform: rotateY(0deg) translateZ(22px); }
+.face-back { transform: rotateY(180deg) translateZ(22px); }
+.face-right { transform: rotateY(90deg) translateZ(22px); }
+.face-left { transform: rotateY(-90deg) translateZ(22px); }
+.face-top { transform: rotateX(90deg) translateZ(22px); }
+.face-bottom { transform: rotateX(-90deg) translateZ(22px); }
+
+.dice-cube.show-1 { transform: rotateX(0deg) rotateY(0deg); }
+.dice-cube.show-2 { transform: rotateX(-90deg) rotateY(0deg); }
+.dice-cube.show-3 { transform: rotateX(0deg) rotateY(90deg); }
+.dice-cube.show-4 { transform: rotateX(0deg) rotateY(-90deg); }
+.dice-cube.show-5 { transform: rotateX(90deg) rotateY(0deg); }
+.dice-cube.show-6 { transform: rotateX(0deg) rotateY(180deg); }
+
+.dice-container.rolling .dice-cube {
+  animation: battle-dice-spin .52s linear infinite;
+  animation-delay: inherit;
+  transition: none;
+}
+
+.battle-result--rolling .dice-container {
+  filter: drop-shadow(0 0 10px rgba(240, 190, 91, .32));
+}
+
+.battle-result--rolling .dice-score > div::before {
+  opacity: .65;
+}
+
+@keyframes battle-dice-spin {
+  0% { transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(.92); }
+  24% { transform: rotateX(145deg) rotateY(70deg) rotateZ(22deg) scale(1.08); }
+  52% { transform: rotateX(280deg) rotateY(210deg) rotateZ(-16deg) scale(.98); }
+  78% { transform: rotateX(415deg) rotateY(315deg) rotateZ(18deg) scale(1.05); }
+  100% { transform: rotateX(540deg) rotateY(450deg) rotateZ(0deg) scale(.92); }
+}
+
+@media (max-width: 560px) {
+  .battle-result {
+    width: min(385px, calc(100% - 18px));
+    padding: 14px 13px;
+  }
+
+  .dice-score {
+    gap: 8px;
+  }
+
+  .dice-container {
+    width: 38px;
+    height: 38px;
+    flex-basis: 38px;
+  }
+
+  .dice-face {
+    border-radius: 7px;
+    font-size: 1.9rem;
+  }
+
+  .face-front { transform: rotateY(0deg) translateZ(19px); }
+  .face-back { transform: rotateY(180deg) translateZ(19px); }
+  .face-right { transform: rotateY(90deg) translateZ(19px); }
+  .face-left { transform: rotateY(-90deg) translateZ(19px); }
+  .face-top { transform: rotateX(90deg) translateZ(19px); }
+  .face-bottom { transform: rotateX(-90deg) translateZ(19px); }
+}
