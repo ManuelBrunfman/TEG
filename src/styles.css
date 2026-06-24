@@ -344,26 +344,26 @@ h1, h2 { letter-spacing: .015em; }
 .map-shell { position: relative; width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .map-scroll { width: 100%; height: 100%; overflow: auto; overscroll-behavior: contain; touch-action: pan-x pan-y; background: radial-gradient(circle, #2f4543, #142220); scrollbar-color: #8d6a39 #1b2727; }
 .map-stage { display: flex; align-items: center; justify-content: center; padding: 16px; }
-.world-map { flex: 0 0 auto; display: block; background: #cad0c5; border: 2px solid #6f4d29; box-shadow: 0 6px 22px rgba(0,0,0,.5); }
+.world-map { flex: 0 0 auto; display: block; background: radial-gradient(circle, #fcf5e3 40%, #e2ce9f 100%); border: 6px double #5c3c16; box-shadow: 0 12px 38px rgba(0,0,0,.7); }
 .teg-map-base { filter: grayscale(.85) sepia(.12); pointer-events: none; }
-.teg-map-detail { opacity: .52; filter: grayscale(1) contrast(1.3); mix-blend-mode: multiply; pointer-events: none; }
+.teg-map-detail { opacity: .65; filter: grayscale(1) contrast(1.3); mix-blend-mode: multiply; pointer-events: none; }
 .territory-mask { mask-type: alpha; }
 .territory-piece { cursor: pointer; outline: none; }
-.territory-owner { opacity: .96; pointer-events: visiblePainted; transition: opacity .16s ease; }
+.territory-owner { opacity: .8; mix-blend-mode: multiply; pointer-events: visiblePainted; transition: opacity .16s ease; }
 .territory-hit { opacity: .001; pointer-events: visiblePainted; transition: opacity .16s ease, filter .16s ease; }
 .territory-piece:hover .territory-owner,
-.territory-piece:focus .territory-owner { opacity: .9; }
+.territory-piece:focus .territory-owner { opacity: .68; }
 .territory-piece--neighbor .territory-hit { opacity: .3; filter: url(#territory-glow) brightness(1.45); }
 .territory-piece--selected .territory-hit { opacity: .7; filter: url(#territory-glow) brightness(1.65); }
 .army-marker { cursor: pointer; }
-.army-marker circle { stroke: #2a1a10; stroke-width: 2.5; transition: r .15s, stroke .15s; }
+.army-marker circle { stroke: #9c763c; stroke-width: 3; transition: r .15s, stroke .15s, stroke-width .15s; }
 .army-marker:hover circle,
-.army-marker--selected circle { r: 13px; stroke: #fff0b6; stroke-width: 3.5; }
+.army-marker--selected circle { r: 13px; stroke: #ffebb3; stroke-width: 4; }
 .country-army { fill: white; font-size: 11px; font-weight: 900; paint-order: stroke; stroke: #17110c; stroke-width: 2px; pointer-events: none; }
 .country-army--small { font-size: 8px; }
 .army-color-letter { fill: #fff4c8; font-size: 6px; font-weight: 900; paint-order: stroke; stroke: #17110c; stroke-width: 1px; pointer-events: none; }
 .country-name { fill: #fff3ce; font-family: system-ui, sans-serif; font-size: 7px; font-weight: 800; paint-order: stroke; stroke: #21160e; stroke-width: 2.5px; stroke-linejoin: round; pointer-events: none; }
-.country-name-toggle { position: absolute; z-index: 7; top: 12px; right: 12px; min-height: 34px; border: 1px solid #8e6536; border-radius: 6px; background: rgba(30,20,13,.92); color: #d7bd87; padding: 6px 11px; box-shadow: 0 4px 14px rgba(0,0,0,.45); font-family: system-ui, sans-serif; font-size: .68rem; font-weight: 700; }
+.country-name-toggle { position: absolute; z-index: 7; bottom: 12px; right: 12px; min-height: 34px; border: 1px solid #8e6536; border-radius: 6px; background: rgba(30,20,13,.92); color: #d7bd87; padding: 6px 11px; box-shadow: 0 4px 14px rgba(0,0,0,.45); font-family: system-ui, sans-serif; font-size: .68rem; font-weight: 700; }
 .country-name-toggle.active { border-color: #e0b55a; background: #5a3b1d; color: #fff0bd; }
 .battle-result { position: absolute; z-index: 12; left: 50%; top: 52%; width: min(390px, calc(100% - 34px)); transform: translate(-50%, -50%); display: grid; gap: 10px; padding: 17px 20px; border: 2px solid #d4a14b; border-radius: 11px; background: radial-gradient(circle at 50% 0, #5b351c, #1b110b 68%); color: #f1dcaa; box-shadow: 0 15px 45px rgba(0,0,0,.8), inset 0 0 26px rgba(202,142,55,.13); text-align: center; pointer-events: none; animation: battle-panel-in .2s ease-out; }
 .battle-result > small { color: #c8a76a; font-family: system-ui, sans-serif; font-size: .66rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
@@ -383,7 +383,7 @@ h1, h2 { letter-spacing: .015em; }
   70% { transform: rotate(250deg) scale(.96); }
   100% { transform: rotate(360deg) scale(.92); }
 }
-.phase-banner { position: absolute; z-index: 6; top: 12px; left: 12px; width: min(420px, calc(100% - 24px)); display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #c79545; border-left-width: 5px; border-radius: 7px; background: rgba(26,17,10,.94); color: #ead7aa; box-shadow: 0 6px 20px rgba(0,0,0,.55); pointer-events: none; }
+.phase-banner { position: absolute; z-index: 6; top: 12px; left: 12px; width: min(420px, calc(100% - 24px)); display: none; grid-template-columns: 42px 1fr auto; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid #c79545; border-left-width: 5px; border-radius: 7px; background: rgba(26,17,10,.94); color: #ead7aa; box-shadow: 0 6px 20px rgba(0,0,0,.55); pointer-events: none; }
 .phase-banner--placement { border-left-color: #d2a13f; }
 .phase-banner--attack { border-left-color: #b94338; }
 .phase-banner--regroup { border-left-color: #4a85b9; }
@@ -529,7 +529,7 @@ h1, h2 { letter-spacing: .015em; }
   .order-focus .occupation-choice, .order-focus .regroup-choice { gap: 8px; padding: 10px 12px; }
   .order-focus .choice-buttons .button { min-height: 42px; }
   .command-content--orders { padding-top: 10px; }
-  .phase-banner { top: 8px; left: 8px; width: calc(100% - 16px); grid-template-columns: 34px 1fr auto; padding: 7px 9px; }
+  .phase-banner { display: grid; top: 8px; left: 8px; width: calc(100% - 16px); grid-template-columns: 34px 1fr auto; padding: 7px 9px; }
   .phase-banner-icon { width: 31px; height: 31px; font-size: 1rem; }
   .phase-banner-copy p { display: none; }
   .country-name-toggle { top: auto; right: 8px; bottom: 8px; }
@@ -550,10 +550,8 @@ h1, h2 { letter-spacing: .015em; }
   .command-content h2 { margin-bottom: 8px; font-size: 1.12rem; }
   .army-count { margin: 8px 0; padding: 8px 10px; }
   .army-count strong { font-size: 1.55rem; }
-  .phase-banner { top: 7px; left: 7px; width: min(345px, calc(100% - 100px)); grid-template-columns: 32px 1fr auto; padding: 5px 8px; }
-  .phase-banner-icon { width: 29px; height: 29px; font-size: .95rem; }
-  .phase-banner-copy p { display: none; }
-  .country-name-toggle { top: 7px; right: 7px; min-height: 31px; padding: 5px 8px; }
+  .phase-banner { display: none; }
+  .country-name-toggle { top: auto; bottom: 7px; right: 7px; min-height: 31px; padding: 5px 8px; }
   .battle-result { width: min(350px, calc(100% - 28px)); padding: 12px 15px; }
   .dice-score i { width: 35px; height: 35px; font-size: 1.8rem; }
 }

@@ -49,6 +49,21 @@ const phaseDetails: Record<GameState["phase"], { icon: string; kind: string; ste
 
 const diceFaces = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"];
 
+function Dice3D({ value, rolling, delay }: { value: number; rolling: boolean; delay: string }) {
+  return (
+    <div className={`dice-container ${rolling ? "rolling" : ""}`} style={{ animationDelay: delay }}>
+      <div className={`dice-cube show-${value}`}>
+        <div className="dice-face face-front">⚀</div>
+        <div className="dice-face face-back">⚅</div>
+        <div className="dice-face face-right">⚃</div>
+        <div className="dice-face face-left">⚂</div>
+        <div className="dice-face face-top">⚁</div>
+        <div className="dice-face face-bottom">⚄</div>
+      </div>
+    </div>
+  );
+}
+
 const audioFiles = {
   music: `${import.meta.env.BASE_URL}audio/celebration.mp3`,
   dice: `${import.meta.env.BASE_URL}audio/dice-roll.mp3`,
@@ -711,13 +726,13 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
               <div className="dice-score">
                 <div>
                   {battlePresentation.battle.attackerDice.map((die, index) => (
-                    <i style={{ animationDelay: `${index * 70}ms` }} key={`attacker-${index}`}>{diceFaces[die - 1]}</i>
+                    <Dice3D value={die} rolling={battlePresentation.rolling} delay={`${index * 70}ms`} key={`attacker-${index}`} />
                   ))}
                 </div>
                 <b>⚔</b>
                 <div>
                   {battlePresentation.battle.defenderDice.map((die, index) => (
-                    <i style={{ animationDelay: `${index * 70 + 40}ms` }} key={`defender-${index}`}>{diceFaces[die - 1]}</i>
+                    <Dice3D value={die} rolling={battlePresentation.rolling} delay={`${index * 70 + 40}ms`} key={`defender-${index}`} />
                   ))}
                 </div>
               </div>
