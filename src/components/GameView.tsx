@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 import { ADJACENCY, CONTINENTS, COUNTRIES, areAdjacent } from "@shared/map";
 import { missionText } from "@shared/missions";
@@ -27,6 +27,15 @@ interface VoiceSignal extends Omit<VoicePeer, "socketId"> {
   candidate?: RTCIceCandidateInit;
 }
 
+type DiceStyle = CSSProperties & {
+  "--dice-delay": string;
+  "--dice-final-x": string;
+  "--dice-final-y": string;
+  "--dice-spin-z": string;
+  "--dice-drift-x": string;
+  "--dice-drift-y": string;
+};
+
 const phaseText: Record<GameState["phase"], string> = {
   "setup-5": "Disposición inicial · 5 ejércitos",
   "setup-3": "Segunda disposición · 3 ejércitos",
@@ -47,18 +56,45 @@ const phaseDetails: Record<GameState["phase"], { icon: string; kind: string; ste
   finished: { icon: "♛", kind: "finished", step: 3, instruction: "La campaña ha finalizado." }
 };
 
-const diceFaces = ["⚀", "⚁", "⚂", "⚃", "⚄", "⚅"];
+const DICE_REST: Record<number, { x: number; y: number }> = {
+  1: { x: 0, y: 0 },
+  2: { x: -90, y: 0 },
+  3: { x: 0, y: 90 },
+  4: { x: 0, y: -90 },
+  5: { x: 90, y: 0 },
+  6: { x: 0, y: 180 }
+};
 
-function Dice3D({ value, rolling, delay }: { value: number; rolling: boolean; delay: string }) {
+function Dice3D({ value, rolling, delay, index }: { value: number; rolling: boolean; delay: string; index: number }) {
+  const motion = useMemo(() => {
+    const seed = value * 31 + index * 17;
+    const rest = DICE_REST[value] ?? DICE_REST[1];
+    const finalX = rest.x + (2 + (seed % 2)) * 360;
+    const finalY = rest.y + (2 + ((seed >> 1) % 2)) * 360;
+    const spinZ = (seed % 2 === 0 ? 1 : -1) * (8 + (seed % 10));
+    const driftX = (seed % 7) - 3;
+    const driftY = ((seed >> 2) % 7) - 3;
+    return { finalX, finalY, spinZ, driftX, driftY };
+  }, [index, value]);
+  const faceStyle: DiceStyle = {
+    "--dice-delay": delay,
+    "--dice-final-x": `${motion.finalX}deg`,
+    "--dice-final-y": `${motion.finalY}deg`,
+    "--dice-spin-z": `${motion.spinZ}deg`,
+    "--dice-drift-x": `${motion.driftX}px`,
+    "--dice-drift-y": `${motion.driftY}px`
+  };
+  const renderPips = (count: number) => Array.from({ length: count }, (_, pipIndex) => <span className={`pip pip--${count}-${pipIndex}`} key={pipIndex} />);
+
   return (
-    <div className={`dice-container ${rolling ? "rolling" : ""}`} style={{ animationDelay: delay }}>
+    <div className={`dice-container ${rolling ? "rolling" : ""}`} style={faceStyle}>
       <div className={`dice-cube show-${value}`}>
-        <div className="dice-face face-front">⚀</div>
-        <div className="dice-face face-back">⚅</div>
-        <div className="dice-face face-right">⚃</div>
-        <div className="dice-face face-left">⚂</div>
-        <div className="dice-face face-top">⚁</div>
-        <div className="dice-face face-bottom">⚄</div>
+        <div className="dice-face face-front">{renderPips(1)}</div>
+        <div className="dice-face face-back">{renderPips(6)}</div>
+        <div className="dice-face face-right">{renderPips(3)}</div>
+        <div className="dice-face face-left">{renderPips(4)}</div>
+        <div className="dice-face face-top">{renderPips(2)}</div>
+        <div className="dice-face face-bottom">{renderPips(5)}</div>
       </div>
     </div>
   );
@@ -726,13 +762,13 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
               <div className="dice-score">
                 <div>
                   {battlePresentation.battle.attackerDice.map((die, index) => (
-                    <Dice3D value={die} rolling={battlePresentation.rolling} delay={`${index * 70}ms`} key={`attacker-${index}`} />
+                    <Dice3D value={die} rolling={battlePresentation.rolling} delay={`${index * 78}ms`} index={index} key={`attacker-${index}`} />
                   ))}
                 </div>
                 <b>⚔</b>
                 <div>
                   {battlePresentation.battle.defenderDice.map((die, index) => (
-                    <Dice3D value={die} rolling={battlePresentation.rolling} delay={`${index * 70 + 40}ms`} key={`defender-${index}`} />
+                    <Dice3D value={die} rolling={battlePresentation.rolling} delay={`${index * 78 + 48}ms`} index={index + 3} key={`defender-${index}`} />
                   ))}
                 </div>
               </div>

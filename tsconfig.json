@@ -15,10 +15,9 @@
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "baseUrl": ".",
     "paths": {
-      "@shared/*": ["shared/*"],
-      "@web/*": ["src/*"]
+      "@shared/*": ["./shared/*"],
+      "@web/*": ["./src/*"]
     }
   },
   "include": ["src", "shared", "vite.config.ts"]

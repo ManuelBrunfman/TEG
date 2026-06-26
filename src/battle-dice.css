@@ -1,18 +1,18 @@
-/* Realistic battle dice presentation. */
+/* 3D battle dice presentation. */
 .battle-result {
-  width: min(430px, calc(100% - 28px));
+  width: min(440px, calc(100% - 28px));
 }
 
 .dice-score {
-  align-items: start;
-  gap: 14px;
+  align-items: center;
+  gap: 12px;
 }
 
 .dice-score > div {
   position: relative;
-  min-height: 76px;
+  min-height: 88px;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   padding-top: 22px;
 }
 
@@ -22,7 +22,7 @@
   top: 0;
   left: 50%;
   transform: translateX(-50%);
-  color: #c8a76a;
+  color: #8a7a6a;
   font-family: system-ui, sans-serif;
   font-size: .58rem;
   font-weight: 900;
@@ -35,13 +35,12 @@
 .dice-score > div:last-child::before { content: "Defensor"; }
 
 .dice-container {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  flex: 0 0 44px;
-  perspective: 460px;
-  transform-style: preserve-3d;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  perspective: 900px;
+  transform: translateZ(0);
+  filter: drop-shadow(0 6px 10px rgba(0,0,0,.45));
 }
 
 .dice-cube {
@@ -49,37 +48,79 @@
   width: 100%;
   height: 100%;
   transform-style: preserve-3d;
-  transition: transform .42s cubic-bezier(.16, .84, .24, 1.08);
+  will-change: transform;
 }
 
 .dice-face {
   position: absolute;
   inset: 0;
   display: grid;
-  place-items: center;
-  border: 1px solid #d9d9d9;
-  border-radius: 12px;
-  background:
-    radial-gradient(circle at 30% 22%, rgba(255,255,255,.95), transparent 26%),
-    radial-gradient(circle at 72% 82%, rgba(185,198,220,.24), transparent 38%),
-    linear-gradient(145deg, #ffffff 0%, #f4f6fb 52%, #dfe5f0 100%);
-  color: #111;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: repeat(3, 1fr);
+  padding: 7px;
+  border: 1px solid #6a5c50;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #cfc6b8 0%, #a89880 52%, #b8a890 100%);
   box-shadow:
-    inset 0 2px 4px rgba(255,255,255,.9),
-    inset 0 -5px 12px rgba(98,114,140,.16),
-    0 7px 14px rgba(0,0,0,.35);
+    inset 0 2px 0 rgba(255,255,255,.32),
+    inset 0 -3px 8px rgba(30,20,12,.28);
   backface-visibility: hidden;
-  font-size: 2.08rem;
-  line-height: 1;
-  text-shadow: 0 1px 1px rgba(255,255,255,.25);
 }
 
-.face-front { transform: rotateY(0deg) translateZ(22px); }
-.face-back { transform: rotateY(180deg) translateZ(22px); }
-.face-right { transform: rotateY(90deg) translateZ(22px); }
-.face-left { transform: rotateY(-90deg) translateZ(22px); }
-.face-top { transform: rotateX(90deg) translateZ(22px); }
-.face-bottom { transform: rotateX(-90deg) translateZ(22px); }
+.dice-face::after {
+  content: "";
+  position: absolute;
+  inset: 3px;
+  border-radius: 5px;
+  border: 0.5px solid rgba(50,36,24,.18);
+  pointer-events: none;
+}
+
+.pip {
+  width: 6px;
+  height: 6px;
+  align-self: center;
+  justify-self: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #2e1e10 0, #120a04 72%);
+  box-shadow:
+    inset 0 1px 1px rgba(0,0,0,.4),
+    0 1px 0 rgba(255,255,255,.15);
+}
+
+.face-front .pip:nth-child(1) { grid-area: 2 / 2; }
+
+.face-back .pip:nth-child(1) { grid-area: 1 / 1; }
+.face-back .pip:nth-child(2) { grid-area: 1 / 3; }
+.face-back .pip:nth-child(3) { grid-area: 2 / 2; }
+.face-back .pip:nth-child(4) { grid-area: 3 / 1; }
+.face-back .pip:nth-child(5) { grid-area: 3 / 3; }
+.face-back .pip:nth-child(6) { grid-area: 2 / 1; }
+
+.face-right .pip:nth-child(1) { grid-area: 1 / 1; }
+.face-right .pip:nth-child(2) { grid-area: 2 / 2; }
+.face-right .pip:nth-child(3) { grid-area: 3 / 3; }
+
+.face-left .pip:nth-child(1) { grid-area: 1 / 1; }
+.face-left .pip:nth-child(2) { grid-area: 1 / 3; }
+.face-left .pip:nth-child(3) { grid-area: 3 / 1; }
+.face-left .pip:nth-child(4) { grid-area: 3 / 3; }
+
+.face-top .pip:nth-child(1) { grid-area: 1 / 1; }
+.face-top .pip:nth-child(2) { grid-area: 3 / 3; }
+
+.face-bottom .pip:nth-child(1) { grid-area: 1 / 1; }
+.face-bottom .pip:nth-child(2) { grid-area: 1 / 3; }
+.face-bottom .pip:nth-child(3) { grid-area: 2 / 2; }
+.face-bottom .pip:nth-child(4) { grid-area: 3 / 1; }
+.face-bottom .pip:nth-child(5) { grid-area: 3 / 3; }
+
+.face-front { transform: rotateY(0deg) translateZ(24px); }
+.face-back { transform: rotateY(180deg) translateZ(24px); }
+.face-right { transform: rotateY(90deg) translateZ(24px); }
+.face-left { transform: rotateY(-90deg) translateZ(24px); }
+.face-top { transform: rotateX(90deg) translateZ(24px); }
+.face-bottom { transform: rotateX(-90deg) translateZ(24px); }
 
 .dice-cube.show-1 { transform: rotateX(0deg) rotateY(0deg); }
 .dice-cube.show-2 { transform: rotateX(-90deg) rotateY(0deg); }
@@ -89,25 +130,69 @@
 .dice-cube.show-6 { transform: rotateX(0deg) rotateY(180deg); }
 
 .dice-container.rolling .dice-cube {
-  animation: battle-dice-spin .9s cubic-bezier(.22, .61, .36, 1) both;
-  animation-delay: inherit;
-  transition: none;
-}
-
-.battle-result--rolling .dice-container {
-  filter: drop-shadow(0 0 12px rgba(255,255,255,.32)) drop-shadow(0 0 9px rgba(240,190,91,.28));
-}
-
-.battle-result--rolling .dice-score > div::before {
-  opacity: .65;
+  animation: battle-dice-spin 1.08s cubic-bezier(.12, .78, .18, 1) both;
+  animation-delay: var(--dice-delay);
 }
 
 @keyframes battle-dice-spin {
-  0% { transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg) scale(.9); }
-  16% { transform: rotateX(90deg) rotateY(125deg) rotateZ(18deg) scale(1.02); }
-  43% { transform: rotateX(260deg) rotateY(310deg) rotateZ(-14deg) scale(1.08); }
-  72% { transform: rotateX(420deg) rotateY(470deg) rotateZ(12deg) scale(1); }
-  100% { transform: rotateX(540deg) rotateY(540deg) rotateZ(0deg) scale(.96); }
+  0% {
+    transform:
+      translate3d(0, 0, 0)
+      rotateX(0deg) rotateY(0deg) rotateZ(0deg)
+      scale(.94);
+  }
+  24% {
+    transform:
+      translate3d(calc(var(--dice-drift-x) * .32), calc(var(--dice-drift-y) * -.45), 0)
+      rotateX(calc(var(--dice-final-x) * .16))
+      rotateY(calc(var(--dice-final-y) * .14))
+      rotateZ(calc(var(--dice-spin-z) * .16))
+      scale(1.015);
+  }
+  52% {
+    transform:
+      translate3d(calc(var(--dice-drift-x) * .5), calc(var(--dice-drift-y) * .28), 0)
+      rotateX(calc(var(--dice-final-x) * .48))
+      rotateY(calc(var(--dice-final-y) * .44))
+      rotateZ(calc(var(--dice-spin-z) * -.18))
+      scale(1.04);
+  }
+  78% {
+    transform:
+      translate3d(calc(var(--dice-drift-x) * -.08), calc(var(--dice-drift-y) * .08), 0)
+      rotateX(calc(var(--dice-final-x) * .82))
+      rotateY(calc(var(--dice-final-y) * .82))
+      rotateZ(calc(var(--dice-spin-z) * .1))
+      scale(1.005);
+  }
+  92% {
+    transform:
+      translate3d(0, 0, 0)
+      rotateX(calc(var(--dice-final-x) + 1deg))
+      rotateY(calc(var(--dice-final-y) + 1deg))
+      rotateZ(0deg)
+      scale(.998);
+  }
+  100% {
+    transform:
+      translate3d(0, 0, 0)
+      rotateX(var(--dice-final-x))
+      rotateY(var(--dice-final-y))
+      rotateZ(0deg)
+      scale(1);
+  }
+}
+
+.battle-result--rolling .dice-container {
+  filter:
+    drop-shadow(0 0 6px rgba(180,155,120,.25))
+    drop-shadow(0 10px 16px rgba(0,0,0,.40));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dice-container.rolling .dice-cube {
+    animation: none;
+  }
 }
 
 @media (max-width: 560px) {
@@ -121,20 +206,20 @@
   }
 
   .dice-container {
-    width: 38px;
-    height: 38px;
-    flex-basis: 38px;
+    width: 40px;
+    height: 40px;
+    flex-basis: 40px;
   }
 
   .dice-face {
-    border-radius: 10px;
-    font-size: 1.86rem;
+    padding: 6px;
+    border-radius: 7px;
   }
 
-  .face-front { transform: rotateY(0deg) translateZ(19px); }
-  .face-back { transform: rotateY(180deg) translateZ(19px); }
-  .face-right { transform: rotateY(90deg) translateZ(19px); }
-  .face-left { transform: rotateY(-90deg) translateZ(19px); }
-  .face-top { transform: rotateX(90deg) translateZ(19px); }
-  .face-bottom { transform: rotateX(-90deg) translateZ(19px); }
+  .face-front { transform: rotateY(0deg) translateZ(20px); }
+  .face-back { transform: rotateY(180deg) translateZ(20px); }
+  .face-right { transform: rotateY(90deg) translateZ(20px); }
+  .face-left { transform: rotateY(-90deg) translateZ(20px); }
+  .face-top { transform: rotateX(90deg) translateZ(20px); }
+  .face-bottom { transform: rotateX(-90deg) translateZ(20px); }
 }
