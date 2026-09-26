@@ -4,40 +4,18 @@ import type { ChatMessage, GameSettings, GameState, PublicGameSummary, Session }
 import { api, type AdminUser, type FriendsState, type GameInvite } from "./api";
 import { Coat } from "./components/Coat";
 import { GameView } from "./components/GameView";
+import { forgetOnlineGame, leaveSession, rememberedSession, rememberOnlineGame, rememberSession, savedOnlineGame, savedSession } from "./session";
 
 const avatars = ["⚔️", "🛡️", "🏰", "🐉", "🦅", "🦁"];
-const onlineGameStorageKey = "reinos-online-game";
-
-interface SavedOnlineGame {
-  id: string;
-  code: string;
-  name: string;
-}
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
 }
 
-function savedSession(): Session | null {
-  try {
-    return JSON.parse(localStorage.getItem("reinos-session") || "null");
-  } catch {
-    return null;
-  }
-}
-
 function savedLocalGame(): GameState | null {
   try {
     return JSON.parse(localStorage.getItem("reinos-local-game") || "null");
-  } catch {
-    return null;
-  }
-}
-
-function savedOnlineGame(): SavedOnlineGame | null {
-  try {
-    return JSON.parse(localStorage.getItem(onlineGameStorageKey) || "null");
   } catch {
     return null;
   }
@@ -84,31 +62,28 @@ export default function App() {
   };
 
   const openOnlineGame = (next: GameState) => {
-    localStorage.setItem(onlineGameStorageKey, JSON.stringify({
+    if (session && next.status !== "finished") rememberOnlineGame({
       id: next.id,
       code: next.code,
       name: next.name
-    } satisfies SavedOnlineGame));
+    }, session);
+    if (session && next.status === "finished") forgetOnlineGame(session.id);
     setLocalMode(false);
     setGame(next);
   };
 
   const exitGame = (finished = false) => {
     if (finished) {
-      localStorage.removeItem(localMode ? "reinos-local-game" : onlineGameStorageKey);
+      if (localMode) localStorage.removeItem("reinos-local-game");
+      else if (session) forgetOnlineGame(session.id);
     }
     setGame(null);
     setLocalMode(false);
     setPage("home");
-    if (finished && session && !session.registered) {
-      localStorage.removeItem("reinos-session");
-      void api.deleteGuestSession(session.id).catch(() => undefined);
-      setSession(null);
-    }
   };
 
   if (!session) return <Welcome installed={installed} canInstall={Boolean(installPrompt)} onInstall={installApp} onReady={(next) => {
-    localStorage.setItem("reinos-session", JSON.stringify(next));
+    rememberSession(next);
     setSession(next);
   }} />;
 
@@ -137,8 +112,7 @@ export default function App() {
     canInstall={Boolean(installPrompt)}
     onInstall={installApp}
     onLogout={() => {
-    localStorage.removeItem("reinos-session");
-    localStorage.removeItem(onlineGameStorageKey);
+    leaveSession();
     setSession(null);
   }} />;
 }
@@ -154,15 +128,21 @@ function Welcome({
   canInstall: boolean;
   onInstall: () => Promise<boolean>;
 }) {
-  const [name, setName] = useState("");
-  const [avatar, setAvatar] = useState(avatars[0]);
+  const [name, setName] = useState(() => rememberedSession()?.name ?? "");
+  const [avatar, setAvatar] = useState(() => rememberedSession()?.avatar ?? avatars[0]);
+  const [entering, setEntering] = useState(false);
   const [error, setError] = useState("");
   const enter = async () => {
+    if (entering) return;
     try {
+      setEntering(true);
       setError("");
-      onReady(await api.session(name, avatar));
+      const remembered = rememberedSession(name);
+      onReady(await api.session(name, avatar, remembered?.id));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No se pudo ingresar.");
+    } finally {
+      setEntering(false);
     }
   };
   return (
@@ -181,7 +161,10 @@ function Welcome({
         <div className="avatar-picker">
           {avatars.map((item) => <button key={item} className={item === avatar ? "active" : ""} onClick={() => setAvatar(item)}>{item}</button>)}
         </div>
-        <button className="button button--large" onClick={enter} disabled={name.trim().length < 2}>Entrar como invitado</button>
+        <button className="button button--large" onClick={enter} disabled={entering || name.trim().length < 2}>
+          {entering ? "Entrando…" : rememberedSession(name) ? `Volver como ${name.trim()}` : "Entrar como invitado"}
+        </button>
+        {rememberedSession(name) && <p className="remembered-note">Tu jugador y tu partida quedan guardados en este navegador.</p>}
         {!installed && <InstallAppButton canInstall={canInstall} onInstall={onInstall} />}
         <div className="social-row">
           <button disabled title="Se activa al configurar credenciales">G Google</button>
@@ -220,9 +203,11 @@ function Home({
   const [code, setCode] = useState("");
   const [error, setError] = useState("");
   const hasSavedLocal = Boolean(savedLocalGame());
-  const onlineGame = savedOnlineGame();
+  const [onlineGame, setOnlineGame] = useState(() => savedOnlineGame(session.id));
+  const [resuming, setResuming] = useState(false);
   const refresh = () => api.publicGames().then(setGames).catch(() => setGames([]));
   useEffect(() => {
+    setOnlineGame(savedOnlineGame(session.id));
     void refresh();
     void api.friends(session.id).then(setFriends).catch(() => undefined);
     void api.invites(session.id).then(setInvites).catch(() => undefined);
@@ -246,6 +231,22 @@ function Home({
         <span className="hero-knight">♞</span>
       </section>
       <section className="action-grid">
+        {onlineGame && (
+          <button className="action-card action-card--resume" disabled={resuming} onClick={async () => {
+            try {
+              setError("");
+              setResuming(true);
+              onGame(await api.joinGame(onlineGame.code, session));
+            } catch (caught) {
+              setError(caught instanceof Error ? caught.message : "No se pudo retomar la partida. Probá nuevamente cuando vuelva la conexión.");
+            } finally {
+              setResuming(false);
+            }
+          }}>
+            <span>↻</span><strong>{resuming ? "Volviendo…" : "Volver a la partida en curso"}</strong>
+            <small>{onlineGame.name} · Retomá tu lugar sin ingresar el código</small>
+          </button>
+        )}
         <button className="action-card action-card--gold" onClick={() => onNavigate("create")}>
           <span>⚔</span><strong>Crear partida</strong><small>Pública o privada, hasta 6 jugadores</small>
         </button>
@@ -267,18 +268,6 @@ function Home({
         {hasSavedLocal && (
           <button className="action-card" onClick={onResumeLocal}>
             <span>📜</span><strong>Continuar partida local</strong><small>Retomá la campaña guardada en este dispositivo</small>
-          </button>
-        )}
-        {onlineGame && (
-          <button className="action-card" onClick={async () => {
-            try {
-              setError("");
-              onGame(await api.joinGame(onlineGame.code, session));
-            } catch (caught) {
-              setError(caught instanceof Error ? caught.message : "No se pudo retomar la partida.");
-            }
-          }}>
-            <span>↻</span><strong>Continuar partida online</strong><small>{onlineGame.name} · {onlineGame.code}</small>
           </button>
         )}
       </section>

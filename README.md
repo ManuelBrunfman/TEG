@@ -52,7 +52,18 @@ Los datos se guardan en `data/reinos.sqlite`. La base usa WAL y cada acción de 
 npm run check
 npm test
 npm run build
+npm run test:online
 ```
+
+La prueba online usa una base temporal propia y verifica reingreso, varias pestañas, persistencia y vencimiento del reloj sin alterar las partidas guardadas.
+
+## Volver a una partida familiar
+
+El mismo navegador recuerda al invitado y su última partida online. Al salir y regresar aparece «Volver como Manualete» (con el nombre elegido), y en el inicio «Volver a la partida en curso», sin pedir el código de nuevo. Cada invitado que use ese navegador conserva su propia partida.
+
+Una desconexión no pausa ni reinicia el reloj. Si regresás antes de que venza, continuás con el tiempo restante. Al agotarse, el servidor completa los refuerzos pendientes o cierra el turno, según la fase. La recuperación depende de conservar los datos del navegador; el modo incógnito o borrar esos datos no conserva al invitado.
+
+El mapa tiene zoom, arrastre y «Ver todo». Los ejércitos mantienen un tamaño legible al alejarlo, y al tocar un país se muestra su nombre, color y cantidad. Las acciones del turno siguen disponibles al abrir cartas, pactos o chat.
 
 ## Componentes principales
 

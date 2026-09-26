@@ -10,5 +10,5 @@
     "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["shared/**/*.ts"]
+  "include": ["shared/**/*.ts", "src/session.ts", "src/session.test.ts", "server/presence.ts", "server/presence.test.ts"]
 }

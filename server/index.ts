@@ -21,6 +21,7 @@ import {
   userProfile
 } from "./db.js";
 import { store } from "./store.js";
+import { Presence } from "./presence.js";
 
 const port = Number(process.env.PORT || 3100);
 const app = express();
@@ -33,6 +34,7 @@ interface VoiceMember {
   avatar: string;
 }
 const voiceRooms = new Map<string, Map<string, VoiceMember>>();
+const presence = new Presence();
 
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
@@ -150,7 +152,7 @@ app.post(
     const isParticipant = game.players.some((player) => player.id === session.id);
     if (isParticipant || game.status === "lobby") {
       store.join(game, session);
-      io.to(game.id).emit("game:state", store.view(game.id));
+      broadcast(game.id);
     } else if (!game.settings.spectators) {
       throw new Error("Esta partida no admite espectadores.");
     }
@@ -172,7 +174,7 @@ app.post(
     const game = store.get(String(request.params.id));
     if (!game || game.hostId !== request.body.actorId) throw new Error("Solo el anfitrión puede agregar bots.");
     store.addBot(game.id);
-    io.to(game.id).emit("game:state", store.view(game.id));
+    broadcast(game.id);
     response.json(store.view(game.id, request.body.actorId));
   })
 );
@@ -219,17 +221,24 @@ io.on("connection", (socket) => {
     "game:watch",
     (
       { gameId, playerId }: { gameId: string; playerId?: string },
-      acknowledge?: (result: { ok: boolean; error?: string }) => void
+      acknowledge?: (result: { ok: boolean; error?: string; serverNow?: number }) => void
     ) => {
       try {
+        if (!store.get(gameId)) throw new Error("Partida inexistente.");
         leaveVoice(socket);
+        const previous = presence.watch(socket.id, gameId, playerId);
+        if (previous && (previous.gameId !== gameId || previous.playerId !== playerId)) {
+          socket.leave(previous.gameId);
+          if (previous.playerId) store.connect(previous.gameId, previous.playerId, presence.connected(previous.gameId, previous.playerId));
+          broadcast(previous.gameId);
+        }
         socket.join(gameId);
         socket.data.gameId = gameId;
         socket.data.playerId = playerId;
         if (playerId) store.connect(gameId, playerId, true);
         socket.emit("game:state", store.view(gameId, playerId));
         broadcast(gameId);
-        acknowledge?.({ ok: true });
+        acknowledge?.({ ok: true, serverNow: Date.now() });
       } catch (error) {
         const message = error instanceof Error ? error.message : "No se pudo entrar.";
         acknowledge?.({ ok: false, error: message });
@@ -249,6 +258,7 @@ io.on("connection", (socket) => {
         broadcast(payload.gameId);
         acknowledge?.({ ok: true });
       } catch (error) {
+        if (store.get(payload.gameId)) broadcast(payload.gameId);
         acknowledge?.({ ok: false, error: error instanceof Error ? error.message : "Acción inválida." });
       }
     }
@@ -338,10 +348,10 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     leaveVoice(socket);
-    const { gameId, playerId } = socket.data as { gameId?: string; playerId?: string };
+    const { gameId, playerId } = presence.leave(socket.id) ?? {};
     if (gameId && playerId) {
       try {
-        store.connect(gameId, playerId, false);
+        store.connect(gameId, playerId, presence.connected(gameId, playerId));
         broadcast(gameId);
       } catch {
         // La partida pudo haber sido eliminada durante la desconexión.
@@ -380,5 +390,6 @@ app.use(express.static(webDist));
 app.get("*", (_request, response) => response.sendFile(path.join(webDist, "index.html")));
 
 httpServer.listen(port, "0.0.0.0", () => {
-  console.log(`TEG Online disponible en http://localhost:${port}`);
+  const address = httpServer.address();
+  console.log(`TEG Online disponible en http://localhost:${typeof address === "object" && address ? address.port : port}`);
 });

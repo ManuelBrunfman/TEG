@@ -96,6 +96,11 @@ class GameStore {
 
   action(gameId: string, actorId: string, action: GameAction) {
     const game = this.required(gameId);
+    if (!game.paused && game.turnDeadline && Date.now() >= game.turnDeadline) {
+      handleTimeout(game);
+      saveGame(game);
+      throw new Error("Se agotó el tiempo. El tablero se actualizó; revisá el turno actual.");
+    }
     applyAction(game, actorId, action);
     saveGame(game);
     return game;
@@ -149,7 +154,7 @@ class GameStore {
       const before = game.updatedAt;
       handleTimeout(game);
       const active = game.players[game.activePlayerIndex];
-      if (active && (active.isBot || !active.connected) && Date.now() - game.updatedAt > 450) {
+      if (active?.isBot && Date.now() - game.updatedAt > 450) {
         runBotStep(game);
       }
       if (game.updatedAt !== before) {

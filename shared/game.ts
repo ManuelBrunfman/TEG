@@ -693,13 +693,13 @@ export function handleTimeout(state: GameState): GameState {
 export function runBotStep(state: GameState): GameState {
   if (state.status !== "playing" || state.paused) return state;
   const player = activePlayer(state);
-  if (!player.isBot && player.connected) return state;
+  if (!player.isBot) return state;
 
   if (["setup-5", "setup-3", "reinforce"].includes(state.phase)) {
     if (state.reinforcements === 0) {
       return applyAction(state, player.id, { type: "confirm-placement" });
     }
-    if (player.isBot && state.phase === "reinforce") {
+    if (state.phase === "reinforce") {
       const exchangeCards = findValidExchangeCards(player.cards);
       if (exchangeCards) {
         return applyAction(state, player.id, {
@@ -714,15 +714,6 @@ export function runBotStep(state: GameState): GameState {
     const eligible = requiredContinent
       ? owned.filter((country) => COUNTRIES[country.id].continent === requiredContinent)
       : owned;
-    if (!player.isBot) {
-      const randomCountry = eligible[Math.floor(Math.random() * eligible.length)];
-      return applyAction(state, player.id, {
-        type: "place",
-        countryId: randomCountry.id,
-        count: 1,
-        source: requiredContinent ?? "base"
-      });
-    }
     const border = eligible.filter((country) =>
       (ADJACENCY[country.id] ?? []).some((neighbor) => state.countries[neighbor].ownerId !== player.id)
     );
@@ -740,11 +731,10 @@ export function runBotStep(state: GameState): GameState {
   if (state.phase === "occupy") {
     return applyAction(state, player.id, {
       type: "occupy",
-      count: player.isBot ? state.pendingConquest?.maximum ?? 1 : state.pendingConquest?.minimum ?? 1
+      count: state.pendingConquest?.maximum ?? 1
     });
   }
   if (state.phase === "attack") {
-    if (!player.isBot) return applyAction(state, player.id, { type: "end-attack" });
     const possible = ownedCountries(state, player.id)
       .flatMap((from) =>
         (ADJACENCY[from.id] ?? []).map((toId) => ({ from, to: state.countries[toId] }))

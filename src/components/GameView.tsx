@@ -138,6 +138,12 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
       : null
   }));
   const [selected, setSelected] = useState<number | null>(null);
+  const [inspected, setInspected] = useState<number | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
+  const [actionPending, setActionPending] = useState(false);
+  const [clockOffset, setClockOffset] = useState(0);
+  const actionPendingRef = useRef(false);
+  const latestGameRef = useRef(game);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<"ordenes" | "chat" | "cartas" | "pactos">("ordenes");
   const [chat, setChat] = useState("");
@@ -166,7 +172,8 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   const pendingVoiceCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
   const active = game.players[game.activePlayerIndex];
   const me = local ? active : game.players.find((player) => player.id === session.id);
-  const isMyTurn = local ? true : active?.id === session.id;
+  const isMyTurn = local ? !active?.isBot : active?.id === session.id;
+  const canAct = isMyTurn && game.status === "playing" && !game.paused && !actionPending && (local || connectionStatus === "connected");
 
   const closeVoicePeer = (socketId: string) => {
     voiceConnectionsRef.current.get(socketId)?.close();
@@ -280,26 +287,40 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
     const socket = io();
     socketRef.current = socket;
     socket.on("connect", () => {
+      setConnectionStatus("connecting");
       setChatStatus("connecting");
       socket.timeout(5000).emit(
         "game:watch",
         { gameId: game.id, playerId: session.id },
-        (timeoutError: Error | null, result?: { ok: boolean; error?: string }) => {
+        (timeoutError: Error | null, result?: { ok: boolean; error?: string; serverNow?: number }) => {
           if (timeoutError || !result?.ok) {
+            setConnectionStatus("disconnected");
             setChatStatus("disconnected");
-            setError(result?.error || "No se pudo conectar el chat.");
+            setError(result?.error || "No se pudo recuperar la partida. Revisá tu conexión.");
+            if (timeoutError && socket.connected) socket.disconnect().connect();
             return;
           }
           setChatStatus("connected");
+          setConnectionStatus("connected");
+          if (result.serverNow) setClockOffset(result.serverNow - Date.now());
+          setError("");
         }
       );
     });
     socket.on("disconnect", () => {
+      setConnectionStatus("disconnected");
+      actionPendingRef.current = false;
+      setActionPending(false);
       setChatStatus("disconnected");
       stopVoice(false);
     });
-    socket.on("connect_error", () => setChatStatus("disconnected"));
+    socket.on("connect_error", () => {
+      setChatStatus("disconnected");
+      setConnectionStatus("disconnected");
+    });
     socket.on("game:state", (next: GameState) => {
+      const previous = latestGameRef.current;
+      latestGameRef.current = next;
       setGame({
         ...next,
         placementHistory: next.placementHistory ?? [],
@@ -307,8 +328,10 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
           ? { ...next.lastBattle, id: next.lastBattle.id ?? `legacy-${next.updatedAt}` }
           : null
       });
-      setSelected(null);
-      setRegroupDraft(null);
+      if (previous.activePlayerIndex !== next.activePlayerIndex || previous.phase !== next.phase) {
+        setSelected(null);
+        setRegroupDraft(null);
+      }
       setSelectedCardIds((current) =>
         current.filter((countryId) =>
           next.players.find((player) => player.id === session.id)?.cards.some((card) => card.countryId === countryId)
@@ -448,8 +471,10 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   }, [game.activePlayerIndex, game.baseReinforcements, game.continentReinforcements, game.phase, reinforcementSource]);
 
   const dispatch = (action: GameAction) => {
+    if (actionPendingRef.current) return;
     setError("");
     if (local) {
+      if (active?.isBot) return;
       try {
         const next = structuredClone(game);
         applyAction(next, active.id, action);
@@ -462,17 +487,36 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
       }
       return;
     }
-    socketRef.current?.emit(
+    const socket = socketRef.current;
+    if (!socket?.connected || connectionStatus !== "connected") {
+      setError("Esperá a que se restablezca la conexión para jugar.");
+      return;
+    }
+    actionPendingRef.current = true;
+    setActionPending(true);
+    socket.timeout(5000).emit(
       "game:action",
       { gameId: game.id, playerId: session.id, action },
-      (result: { ok: boolean; error?: string }) => {
-        if (!result.ok) setError(result.error || "Acción inválida.");
+      (timeoutError: Error | null, result?: { ok: boolean; error?: string }) => {
+        actionPendingRef.current = false;
+        setActionPending(false);
+        if (timeoutError) {
+          setError("No se pudo confirmar la jugada. Estamos recuperando el tablero.");
+          setConnectionStatus("connecting");
+          socket.disconnect().connect();
+        } else if (!result?.ok) setError(result?.error || "Acción inválida.");
+        else {
+          setSelected(null);
+          setRegroupDraft(null);
+          if (action.type === "exchange") setSelectedCardIds([]);
+        }
       }
     );
   };
 
   const selectCountry = (countryId: number) => {
-    if (!isMyTurn || game.status !== "playing") return;
+    setInspected(countryId);
+    if (!canAct || actionPendingRef.current) return;
     if (game.phase === "occupy") return;
     const country = game.countries[countryId];
     if (["setup-5", "setup-3", "reinforce"].includes(game.phase)) {
@@ -517,7 +561,8 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
     }
   };
 
-  const seconds = Math.max(0, Math.ceil(((game.turnDeadline ?? now) - now) / 1000));
+  const remainingMs = game.paused ? game.pausedRemainingMs ?? 0 : (game.turnDeadline ?? now) - now - (local ? 0 : clockOffset);
+  const seconds = Math.max(0, Math.ceil(remainingMs / 1000));
   const myCards = me?.cards ?? [];
   const validCardSet = findValidExchangeCards(myCards);
   const selectedCards = myCards.filter((card) => selectedCardIds.includes(card.countryId));
@@ -527,7 +572,13 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   const winner = game.players.find((player) => player.id === game.winnerId);
   const canStart = game.status === "lobby" && game.hostId === session.id;
   const phase = phaseDetails[game.phase];
-  const phaseInstruction = isMyTurn ? phase.instruction : `Esperando a ${active?.name ?? "otro comandante"}.`;
+  const phaseInstruction = isMyTurn
+    ? ["setup-5", "setup-3", "reinforce"].includes(game.phase)
+      ? game.reinforcements > 0 ? `Te quedan ${game.reinforcements} ejércitos. Tocá tus países para ubicarlos.` : "Ya ubicaste todos. Confirmá para continuar."
+      : phase.instruction
+    : `Esperando a ${active?.name ?? "otro jugador"}. Podés explorar el mapa.`;
+  const inspectedCountry = inspected === null ? null : game.countries[inspected];
+  const inspectedOwner = game.players.find((player) => player.id === inspectedCountry?.ownerId);
   const orderedPlayers = useMemo(() => {
     const order = game.players.map((player, index) => ({ player, index }));
     return [
@@ -691,9 +742,9 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
   }
 
   return (
-    <main className="game-screen">
+    <main className={`game-screen ${local ? "" : "game-screen--online"}`}>
       <header className="war-bar">
-        <button className="icon-button" onClick={() => onExit(game.status === "finished")} aria-label="Salir">☰</button>
+        <button className="icon-button" onClick={() => onExit(game.status === "finished")} aria-label="Volver al inicio">←</button>
         <div>
           <strong>{game.name}</strong>
           <small>
@@ -704,6 +755,10 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
           <span>⌛</span><strong>{seconds}s</strong>
         </div>
       </header>
+
+      {!local && <div className={`game-connection game-connection--${connectionStatus}`} role="status">
+        {connectionStatus === "connected" ? actionPending ? "Enviando jugada…" : "Conectado" : connectionStatus === "connecting" ? "Recuperando el tablero… El reloj sigue corriendo." : "Sin conexión. Reconectando… El reloj sigue corriendo."}
+      </div>}
 
       <section className="player-ribbon">
         <div className="turn-order-label">
@@ -718,7 +773,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
               <strong>{player.name}</strong>
               <small>{index === game.activePlayerIndex ? "JUGANDO AHORA" : orderIndex < currentOrderPosition ? "Ya jugó" : "Próximo"} · {game.countries.filter((c) => c.ownerId === player.id).length} territorios</small>
             </span>
-            {!player.connected && !player.isBot && <em>auto</em>}
+            {!local && !player.connected && !player.isBot && <em>sin conexión</em>}
           </div>
         ))}
       </section>
@@ -727,11 +782,17 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
         <section className="board-wrap">
           <MapBoard
             game={game}
-            selected={selected}
+            selected={selected ?? inspected}
             onSelect={selectCountry}
             colorBlind={colorBlind}
             showCountryNames={showCountryNames}
           />
+          {inspected !== null && inspectedCountry && <div className="territory-info" role="status">
+            <i className={`player-dot color-${inspectedOwner?.color}`} aria-label={`Color ${inspectedOwner?.color}`} />
+            <strong>{COUNTRIES[inspected].name}</strong>
+            <span>{inspectedCountry.armies} {inspectedCountry.armies === 1 ? "ejército" : "ejércitos"}</span>
+            <button aria-label="Cerrar información del país" onClick={() => setInspected(null)}>×</button>
+          </div>}
           <button
             className={`country-name-toggle ${showCountryNames ? "active" : ""}`}
             onClick={() => setShowCountryNames((current) => !current)}
@@ -739,18 +800,6 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
           >
             {showCountryNames ? "Ocultar países" : "Mostrar países"}
           </button>
-          <div className={`phase-banner phase-banner--${phase.kind}`}>
-            <span className="phase-banner-icon">{phase.icon}</span>
-            <div className="phase-banner-copy">
-              <small>FASE ACTUAL · {isMyTurn ? "TU TURNO" : `TURNO DE ${active?.name?.toUpperCase()}`}</small>
-              <strong>{phaseText[game.phase]}</strong>
-              <p>{phaseInstruction}</p>
-            </div>
-            <div className="phase-progress" aria-label={`Paso ${phase.step} de 3`}>
-              {[1, 2, 3].map((step) => <i className={step <= phase.step ? "active" : ""} key={step} />)}
-              <span>{phase.step}/3</span>
-            </div>
-          </div>
           {battlePresentation && (
             <div className={`battle-result ${battlePresentation.rolling ? "battle-result--rolling" : ""}`}>
               <small>{battlePresentation.rolling ? "Los dados están rodando…" : "Resultado de la batalla"}</small>
@@ -802,10 +851,9 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
             <button className={tab === "chat" ? "active" : ""} onClick={() => setTab("chat")}>Chat</button>
           </nav>
 
-          {tab === "ordenes" && (
             <section className={`order-quickbar order-quickbar--${phase.kind}`} aria-label="Acciones del turno">
               <div className="order-quickbar-status">
-                <small>{phaseText[game.phase]}</small>
+                <small>{isMyTurn ? "TU TURNO" : `TURNO DE ${active?.name}`} · {phaseText[game.phase]}</small>
                 <strong>
                   {!isMyTurn
                     ? `Esperando a ${active?.name ?? "otro jugador"}`
@@ -819,20 +867,29 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                             ? "Elegí cuántos mover"
                             : "Turno finalizado"}
                 </strong>
+                {game.phase !== "occupy" && !regroupDraft && <p>{phaseInstruction}</p>}
+                {game.phase === "reinforce" && isMyTurn && <label className="reinforcement-source">
+                  <span>Ubicar</span>
+                  <select aria-label="Origen de los refuerzos" value={reinforcementSource} onChange={(event) => setReinforcementSource(event.target.value as "base" | ContinentId)}>
+                    {game.baseReinforcements > 0 && <option value="base">Libres ({game.baseReinforcements})</option>}
+                    {Object.entries(game.continentReinforcements).filter(([, count]) => (count ?? 0) > 0).map(([id, count]) => <option key={id} value={id}>{CONTINENTS[id as ContinentId].name} ({count})</option>)}
+                    {game.reinforcements === 0 && <option value="base">Todos ubicados</option>}
+                  </select>
+                </label>}
               </div>
               <div className="order-quickbar-actions">
                 {["setup-5", "setup-3", "reinforce"].includes(game.phase) && (
                   <>
                     <button
                       className="button button--secondary button--compact"
-                      disabled={!isMyTurn || game.placementHistory.length === 0}
+                      disabled={!canAct || game.placementHistory.length === 0}
                       onClick={() => dispatch({ type: "undo-place" })}
                     >
                       ↶ Deshacer
                     </button>
                     <button
                       className="button button--compact"
-                      disabled={!isMyTurn || game.reinforcements > 0}
+                      disabled={!canAct || game.reinforcements > 0}
                       onClick={() => dispatch({ type: "confirm-placement" })}
                     >
                       Confirmar
@@ -842,7 +899,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                 {game.phase === "attack" && (
                   <button
                     className="button button--secondary button--compact"
-                    disabled={!isMyTurn}
+                    disabled={!canAct}
                     onClick={() => dispatch({ type: "end-attack" })}
                   >
                     Finalizar ataques
@@ -852,7 +909,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                   <>
                     <button
                       className="button button--compact"
-                      disabled={!isMyTurn}
+                      disabled={!canAct}
                       onClick={() => dispatch({
                         type: "regroup",
                         from: regroupDraft.from,
@@ -876,7 +933,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                 {game.phase === "regroup" && !regroupDraft && (
                   <button
                     className="button button--compact"
-                    disabled={!isMyTurn}
+                    disabled={!canAct}
                     onClick={() => dispatch({ type: "end-turn" })}
                   >
                     Finalizar turno
@@ -884,9 +941,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                 )}
               </div>
             </section>
-          )}
-
-          {tab === "ordenes" && game.phase === "occupy" && game.pendingConquest && (
+          {game.phase === "occupy" && game.pendingConquest && (
             <section className="order-focus order-focus--occupy" aria-label="Elegir ejércitos de ocupación">
               <div className="occupation-choice">
                 <p>
@@ -898,7 +953,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
                     { length: game.pendingConquest.maximum - game.pendingConquest.minimum + 1 },
                     (_, index) => game.pendingConquest!.minimum + index
                   ).map((count) => (
-                    <button className="button" disabled={!isMyTurn} key={count} onClick={() => dispatch({ type: "occupy", count })}>
+                    <button className="button" disabled={!canAct} key={count} onClick={() => dispatch({ type: "occupy", count })}>
                       Mover {count}
                     </button>
                   ))}
@@ -907,7 +962,7 @@ export function GameView({ initialGame, session, local, onExit }: Props) {
             </section>
           )}
 
-          {tab === "ordenes" && game.phase === "regroup" && regroupDraft && (
+          {game.phase === "regroup" && regroupDraft && (
             <section className="order-focus order-focus--regroup" aria-label="Elegir ejércitos para reagrupar">
               <div className="regroup-choice">
                 <strong>{COUNTRIES[regroupDraft.from].name} → {COUNTRIES[regroupDraft.to].name}</strong>

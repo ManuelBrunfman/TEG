@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { addPlayer, applyAction, createGame, runBotStep, startGame } from "./game.js";
+import { addPlayer, applyAction, createGame, handleTimeout, runBotStep, startGame } from "./game.js";
 import type { GameSettings, Session } from "./types.js";
 import { TERRITORY_SPRITES } from "./territories.js";
 
@@ -362,7 +362,7 @@ describe("motor de Reinos en Guerra", () => {
     );
   });
 
-  it("el jugador desconectado coloca fichas pero no ataca automáticamente", () => {
+  it("espera el reloj del jugador desconectado sin jugar por él", () => {
     const game = startedGame();
     const player = game.players[0];
     player.connected = false;
@@ -373,8 +373,32 @@ describe("motor de Reinos en Guerra", () => {
     game.countries[1].ownerId = game.players[1].id;
     game.countries[1].armies = 1;
     runBotStep(game);
-    assert.equal(game.phase, "regroup");
+    assert.equal(game.phase, "attack");
     assert.equal(game.lastBattle, null);
+    const deadline = Date.now() + 5000;
+    game.turnDeadline = deadline;
+    handleTimeout(game);
+    assert.equal(game.phase, "attack");
+    assert.equal(game.turnDeadline, deadline);
+    game.turnDeadline = Date.now() - 1;
+    handleTimeout(game);
+    assert.notEqual(game.activePlayerIndex, 0);
+    assert.ok(game.turnDeadline! > Date.now());
+    assert.equal(game.lastBattle, null);
+  });
+
+  it("no coloca refuerzos de un humano desconectado antes del vencimiento", () => {
+    const game = startedGame();
+    game.players[game.activePlayerIndex].connected = false;
+    const before = structuredClone(game);
+    runBotStep(game);
+    handleTimeout(game);
+    assert.deepEqual(game, before);
+    game.turnDeadline = Date.now() - 1;
+    handleTimeout(game);
+    assert.equal(game.countries.reduce((sum, country) => sum + country.armies, 0), before.countries.reduce((sum, country) => sum + country.armies, 0) + before.reinforcements);
+    assert.equal(game.phase, "setup-5");
+    assert.notEqual(game.activePlayerIndex, before.activePlayerIndex);
   });
 
   it("pausa una partida privada solamente con acuerdo unánime", () => {

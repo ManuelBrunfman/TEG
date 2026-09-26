@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { GameState, Session } from "../shared/types.js";
 
-const dataDir = path.resolve(process.cwd(), "data");
+const dataDir = path.resolve(process.env.TEG_DATA_DIR ?? path.join(process.cwd(), "data"));
 fs.mkdirSync(dataDir, { recursive: true });
 
 export const db = new Database(path.join(dataDir, "reinos.sqlite"));

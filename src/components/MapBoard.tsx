@@ -1,4 +1,4 @@
-import { type TouchEvent, useEffect, useRef, useState } from "react";
+import { type PointerEvent, useEffect, useRef, useState } from "react";
 import { ADJACENCY, COLOR_HEX, COUNTRIES } from "@shared/map";
 import { TERRITORY_SPRITES } from "@shared/territories";
 import type { GameState } from "@shared/types";
@@ -12,13 +12,8 @@ interface Props {
 }
 
 const asset = (file: string) => `${import.meta.env.BASE_URL}map/teg/${file}`;
-const armyRadius = (armies: number) => {
-  if (armies <= 2) return 7;
-  if (armies <= 4) return 8;
-  if (armies <= 6) return 9;
-  if (armies <= 8) return 10;
-  return 11;
-};
+const armyRadius = (armies: number) => armies >= 100 ? 14 : armies >= 10 ? 12 : 10;
+const colorLabels = { azul: "AZ", amarillo: "AM", rojo: "R", negro: "N", verde: "V", magenta: "M" };
 
 export function MapBoard({ game, selected, onSelect, colorBlind, showCountryNames }: Props) {
   const selectedNeighbors = new Set(selected === null ? [] : ADJACENCY[selected] ?? []);
@@ -27,6 +22,9 @@ export function MapBoard({ game, selected, onSelect, colorBlind, showCountryName
   const pinchRef = useRef<{ distance: number; zoom: number } | null>(null);
   const [viewport, setViewport] = useState({ width: 860, height: 520 });
   const [zoom, setZoom] = useState(1);
+  const zoomRef = useRef(1);
+  const pointersRef = useRef(new Map<number, { x: number; y: number; startX: number; startY: number; left: number; top: number }>());
+  const ignoreClickUntil = useRef(0);
 
   useEffect(() => {
     const element = viewportRef.current;
@@ -50,6 +48,7 @@ export function MapBoard({ game, selected, onSelect, colorBlind, showCountryName
   const fitScale = Math.max(0.1, Math.min((viewport.width - 32) / 860, (viewport.height - 32) / 520));
   const mapWidth = 860 * fitScale * zoom;
   const mapHeight = 520 * fitScale * zoom;
+  const mapScale = fitScale * zoom;
   const stageWidth = Math.max(viewport.width, mapWidth + 32);
   const stageHeight = Math.max(viewport.height, mapHeight + 32);
 
@@ -61,23 +60,53 @@ export function MapBoard({ game, selected, onSelect, colorBlind, showCountryName
         y: (element.scrollTop + element.clientHeight / 2) / Math.max(1, element.scrollHeight)
       };
     }
-    setZoom(Math.max(1, Math.min(3, next)));
+    const value = Math.max(1, Math.min(4, next));
+    zoomRef.current = value;
+    setZoom(value);
   };
 
-  const touchDistance = (event: TouchEvent<HTMLDivElement>) => {
-    const first = event.touches[0];
-    const second = event.touches[1];
-    return Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY);
+  const pointerDistance = () => {
+    const [first, second] = [...pointersRef.current.values()];
+    return Math.hypot(second.x - first.x, second.y - first.y);
   };
 
-  const beginPinch = (event: TouchEvent<HTMLDivElement>) => {
-    if (event.touches.length === 2) pinchRef.current = { distance: touchDistance(event), zoom };
+  const beginGesture = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    const element = event.currentTarget;
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, left: element.scrollLeft, top: element.scrollTop });
+    if (pointersRef.current.size === 2) {
+      pinchRef.current = { distance: pointerDistance(), zoom: zoomRef.current };
+      ignoreClickUntil.current = Date.now() + 500;
+    }
   };
 
-  const movePinch = (event: TouchEvent<HTMLDivElement>) => {
-    if (event.touches.length !== 2 || !pinchRef.current) return;
+  const moveGesture = (event: PointerEvent<HTMLDivElement>) => {
+    const pointer = pointersRef.current.get(event.pointerId);
+    if (!pointer) return;
+    pointer.x = event.clientX;
+    pointer.y = event.clientY;
+    const moved = Math.hypot(pointer.x - pointer.startX, pointer.y - pointer.startY) > 6;
+    if (!moved && pointersRef.current.size < 2) return;
     event.preventDefault();
-    setMapZoom(pinchRef.current.zoom * (touchDistance(event) / pinchRef.current.distance));
+    ignoreClickUntil.current = Date.now() + 500;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    if (pointersRef.current.size === 2 && pinchRef.current) {
+      setMapZoom(pinchRef.current.zoom * (pointerDistance() / Math.max(1, pinchRef.current.distance)));
+    } else {
+      event.currentTarget.scrollLeft = pointer.left - (pointer.x - pointer.startX);
+      event.currentTarget.scrollTop = pointer.top - (pointer.y - pointer.startY);
+    }
+  };
+
+  const endGesture = (event: PointerEvent<HTMLDivElement>) => {
+    pointersRef.current.delete(event.pointerId);
+    if (pointersRef.current.size < 2) pinchRef.current = null;
+    for (const pointer of pointersRef.current.values()) {
+      pointer.startX = pointer.x;
+      pointer.startY = pointer.y;
+      pointer.left = event.currentTarget.scrollLeft;
+      pointer.top = event.currentTarget.scrollTop;
+    }
   };
 
   return (
@@ -85,18 +114,22 @@ export function MapBoard({ game, selected, onSelect, colorBlind, showCountryName
       <div
         className="map-scroll"
         ref={viewportRef}
-        onTouchStart={beginPinch}
-        onTouchMove={movePinch}
-        onTouchEnd={(event) => {
-          if (event.touches.length < 2) pinchRef.current = null;
+        onPointerDown={beginGesture}
+        onPointerMove={moveGesture}
+        onPointerUp={endGesture}
+        onPointerCancel={endGesture}
+        onClickCapture={(event) => {
+          if (Date.now() < ignoreClickUntil.current || event.detail > 1) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
         }}
-        onDoubleClick={() => setMapZoom(zoom === 1 ? 2 : 1)}
       >
         <div className="map-stage" style={{ width: stageWidth, height: stageHeight }}>
       <svg
         className="world-map"
         viewBox="0 0 860 520"
-        role="img"
+        role="group"
         aria-label="Mapa mundial de TEG"
         style={{ width: mapWidth, height: mapHeight }}
       >
@@ -143,9 +176,15 @@ export function MapBoard({ game, selected, onSelect, colorBlind, showCountryName
               className={`territory-piece ${isSelected ? "territory-piece--selected" : ""} ${isNeighbor ? "territory-piece--neighbor" : ""}`}
               role="button"
               tabIndex={0}
-              aria-label={`${COUNTRIES[sprite.id].name}, ${state.armies} ejércitos`}
+              aria-label={`${COUNTRIES[sprite.id].name}, ${owner?.color ?? "sin dueño"}, ${state.armies} ejércitos`}
+              aria-pressed={isSelected}
               onClick={() => onSelect(sprite.id)}
-              onKeyDown={(event) => event.key === "Enter" && onSelect(sprite.id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onSelect(sprite.id);
+                }
+              }}
             >
               <rect
                 x={sprite.x}
@@ -179,24 +218,21 @@ export function MapBoard({ game, selected, onSelect, colorBlind, showCountryName
               key={`army-${sprite.id}`}
               className={`army-marker ${selected === sprite.id ? "army-marker--selected" : ""}`}
               onClick={() => onSelect(sprite.id)}
-              role="button"
-              aria-label={`${COUNTRIES[sprite.id].name}, ${state.armies} ejércitos`}
+              aria-hidden="true"
+              transform={`translate(${sprite.markerX} ${sprite.markerY}) scale(${1 / mapScale})`}
             >
               <circle
-                cx={sprite.markerX}
-                cy={sprite.markerY}
-                r={armyRadius(state.armies)}
+                r={colorBlind ? Math.max(13, armyRadius(state.armies)) : armyRadius(state.armies)}
                 fill={owner ? COLOR_HEX[owner.color] : "#777"}
                 filter="url(#army-shadow)"
               />
               {colorBlind && (
-                <text x={sprite.markerX} y={sprite.markerY - 4} textAnchor="middle" className="army-color-letter">
-                  {owner?.color.slice(0, 1).toUpperCase()}
+                <text y={-4} textAnchor="middle" className="army-color-letter">
+                  {owner ? colorLabels[owner.color] : ""}
                 </text>
               )}
               <text
-                x={sprite.markerX}
-                y={sprite.markerY + (colorBlind ? 5 : 3.5)}
+                y={colorBlind ? 7 : 4}
                 textAnchor="middle"
                 className={`country-army ${colorBlind || state.armies < 10 ? "country-army--small" : ""}`}
               >
@@ -204,8 +240,7 @@ export function MapBoard({ game, selected, onSelect, colorBlind, showCountryName
               </text>
               {showCountryNames && (
                 <text
-                  x={sprite.markerX}
-                  y={sprite.markerY - armyRadius(state.armies) - 5}
+                  y={-armyRadius(state.armies) - 6}
                   textAnchor="middle"
                   className="country-name"
                 >
@@ -218,6 +253,11 @@ export function MapBoard({ game, selected, onSelect, colorBlind, showCountryName
       </svg>
         </div>
       </div>
+      <nav className="map-controls" aria-label="Zoom del mapa">
+        <button type="button" aria-label="Alejar mapa" disabled={zoom <= 1} onClick={() => setMapZoom(zoomRef.current / 1.3)}>−</button>
+        <button type="button" aria-label="Acercar mapa" disabled={zoom >= 4} onClick={() => setMapZoom(zoomRef.current * 1.3)}>+</button>
+        <button type="button" onClick={() => { centerRef.current = { x: .5, y: .5 }; zoomRef.current = 1; setZoom(1); const element = viewportRef.current; if (element) { element.scrollLeft = 0; element.scrollTop = 0; } }}>Ver todo</button>
+      </nav>
     </div>
   );
 }
